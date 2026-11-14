@@ -1,65 +1,63 @@
-# Quiz Buzzer Game (2-Device Architecture)
+# Quiz Buzzer — 2-Device Architecture
 
 * **Author:** YakootShaker
-* **Date:** 2026-11-09
+* **Date:** 2026-11-14
 
 ## Overview
 
-Quiz Buzzer is a real-time party trivia game running on Flutter with a Supabase cloud backend (Postgres, Realtime, and Storage). The game operates strictly on a **2-device topology per room**:
-1. **Device 1 (Judge / Referee):** Controls room creation, displays reference answers, selects question categories, triggers audio playback, and scores answers (+1 / -1).
-2. **Device 2 (Shared Players Console):** A single physical phone or tablet shared by 3 players, with the display split into 3 dedicated touch zones (one per player).
+Quiz Buzzer is a real-time trivia buzzer game built with Flutter (Android & iOS, phone & tablet) backed by Supabase (Postgres, Realtime, Storage). The game runs on exactly two devices per room: Device 1 is the Referee screen showing all questions, reference answers, and scoring controls; Device 2 is a shared landscape-orientation screen split into three equal horizontal touch zones, one per player. Players see no question content — only their buzzer zone. All questions, timers, scores, and game state live on the server. The Referee evaluates every spoken answer manually.
 
-The server enforces game state, question delivery, and turn deadlines.
+## Confirmed Constraints
 
-## Analysis
+- **2 devices per room, fixed roles:** Referee and Players Console. No other device may join.
+- **Players Console layout:** Landscape, 3 equal vertical columns on one screen, each is a full-height tap target for one player. No question text or media shown on this screen.
+- **All content on Referee screen only:** Questions (text, image, audio), reference answers, judge notes.
+- **Timer behavior:** Starts the moment a valid buzz is confirmed by the server. Keeps running even if the Players Console is backgrounded or temporarily disconnects. The server holds the absolute deadline (`expires_at`). When the device reconnects it re-syncs to that deadline.
+- **Turn reset authority:** The Referee can reset/skip a question, which cancels the active turn without automatic point deduction.
+- **Media assets:** Royalty-free and free assets only. No copyright concern for private play. App Store publication is a future concern, not v1.
+- **Reconnection:** Only the two original devices (carrying their session tokens) may reconnect to an in-progress room.
 
-### Mechanical & Architectural Trade-offs
+## Key Technical Decisions
 
-1. **Touch Arbitration & Screen Constraints**:
-   - **Advantage:** Because all 3 players share a single screen, buzzer race conditions are resolved locally on the device with zero network latency variance. The first touch registered by the Flutter gesture recognizer instantly locks the other two zones.
-   - **Risk (Hardware & Ergonomics):** Splitting a standard smartphone screen (e.g., 6.1 to 6.7 inches) into 3 interactive touch zones creates high friction for 3 adult hands tapping concurrently. Multitouch hardware drivers on lower-end devices can drop or misfire simultaneous touch events. A tablet layout is ideal, but a phone layout requires strict touch padding and palm-rejection logic.
+1. **Touch arbitration is local, not networked.** Because all 3 players share one physical screen, the first touch is resolved by Flutter's gesture system on-device before anything is sent to the server. No network race condition between players exists; the Players Console sends one `buzz` RPC with the winning player ID.
 
-2. **Timer Continuity & Server Deadline**:
-   - The user requires the 10-second timer to start immediately upon touch and continue running uninterrupted even if Device 2 is backgrounded or temporarily drops connection.
-   - **Technical Mechanism:** When Device 2 registers a valid touch, it sends a `buzz` RPC with the player ID. The server atomically records `expires_at = clock_timestamp() + interval '10 seconds'` and broadcasts the active turn.
-   - If Device 2 is backgrounded, operating system process suspension will halt local UI timers. However, the server's deadline remains unchanged. When Device 2 returns to foreground or reconnects, it queries the server state. If `clock_timestamp() >= expires_at`, the turn is treated as expired with -1 applied immediately.
-   - **Edge Case:** If the Judge also disconnects during this 10-second window, turn resolution requires an idempotent pump call or scheduled expiration in Postgres so the game does not stall.
+2. **Server-authoritative deadline, client-driven expiration pump.** When a buzz is accepted, Supabase records `expires_at = clock_timestamp() + interval '10 seconds'`. Any connected device (Referee or Players Console) can call `expire_turn` after `expires_at` has passed. This means turn expiry does not depend on either device staying continuously online during the countdown.
 
-3. **Strict 2-Device Room Security & Session Binding**:
-   - Each room strictly permits two connections:
-     - `role = judge`
-     - `role = players_console`
-   - **Technical Mechanism:** Upon room creation, Device 1 receives and stores a cryptographically random `judge_token`. Upon entering the 6-digit room PIN, Device 2 receives and stores a `players_token`.
-   - The server rejects any further join attempts once both roles are claimed. If either device disconnects, reconnection is permitted only by presenting the stored token matching that room's role.
+3. **Fallback expiration when both devices disconnect.** If neither device calls `expire_turn` before reconnecting (e.g., both briefly drop), the first device to reconnect will read stale state and immediately fire the pump call if `clock_timestamp() > expires_at`. No server-side cron or Edge Function is needed for v1 because sessions are private and low-frequency.
 
-4. **Media Copyright & Store Distribution**:
-   - Question categories include Arabic pop music snippets, movie titles, and celebrity portraits. If distributed on public app stores (Google Play, Apple App Store), copyrighted audio and media will trigger store rejection or DMCA takedowns unless the media is royalty-free, licensed, or generated without copyright encumbrances.
+4. **Token-based device locking.** On room creation, the server issues two one-time tokens: one for the Referee role, one for the Players Console role. These are stored in device-local secure storage. The server rejects any new join once both roles are claimed, and reconnection requires presenting the matching role token.
+
+5. **Supabase Realtime for state broadcast.** Both devices subscribe to a room-specific Realtime channel. The server broadcasts state snapshots with an incrementing `state_version`; stale updates are discarded on the client.
+
+## Open Risks Identified
+
+- **3-player multitouch on a single screen:** Simultaneous palm placement from three people on a standard 6-inch phone screen is physically crowded. If two players tap within the same Flutter gesture frame (typically 16ms), the gesture recognizer must reliably pick exactly one. This needs testing on low-end Android devices with older touch drivers.
+- **OS background suspension vs. timer display:** When Device 2 (Players Console) is backgrounded, the OS halts the Flutter UI loop. The countdown display freezes locally, but the server deadline advances. On return to foreground the display will jump forward. **Resolution (confirmed by author):** Show a "Reconnecting..." overlay immediately on return to foreground, silently re-sync to the server's current state, then remove the overlay and resume the display at the correct remaining time — no elapsed-time explanation shown to players.
+- **Reconnect token storage durability:** If a player uninstalls and reinstalls the app mid-session, the stored token is gone. That device can no longer rejoin. For private play this is acceptable but should be documented.
 
 ## Goals vs. Non-Goals
 
-### In-Scope Goals
-* **2-Device Room Topology:** Exactly 2 active clients connected per room (1 Judge, 1 Player Console).
-* **3-Player Split-Screen Console:** Dedicated 3-zone touch layout on Device 2 with immediate local touch lock and visual feedback.
-* **Non-Stop Deadline Enforcement:** Turn timers run against server timestamps (`expires_at`), making backgrounding or network drops incapable of freezing or delaying countdown expiry.
-* **Deterministic Role Reconnection:** Token-based device locking so only the original 2 devices can reconnect to an in-progress match.
-* **Authoritative Cloud State:** Supabase Postgres RPCs manage score mutations, rounds, and question banks.
+**In-Scope Goals:**
+- Exactly 2 devices per room (Referee + Players Console)
+- Landscape split-screen with 3 equal touch zones, no content shown on players' screen
+- Server-authoritative turn timer that survives device backgrounding or brief disconnection
+- Referee can reset/skip a question without automatic score penalty
+- Role-locked reconnection via per-device session tokens
+- Cloud question bank (10 categories, text/image/audio) managed via external admin tool
+- Score events logged per turn with manual adjustment support
 
-### Out-of-Scope Non-Goals
-* **N-Device / BYOD Model:** Individual phones for each player are excluded; 3 players must share Device 2.
-* **Offline / Peer-to-Peer Play:** No local hotspot or Wi-Fi Direct networking; all interactions flow through the cloud.
-* **Automated Audio Answer Evaluation:** The Judge manually determines whether a spoken answer is correct or incorrect.
+**Out-of-Scope Non-Goals:**
+- One phone per player (BYOD model)
+- Offline or local Wi-Fi play
+- Automated speech recognition for answer evaluation
+- In-app question editing by the Referee
+- Tournament systems, accounts, or leaderboards
+- Network latency compensation between players (no NTP delta adjustment)
+- Copyright media — only royalty-free assets in v1
 
 ## Alternatives Weighed
 
-* **One Phone Per Player (v2.0 Spec Document):**
-  - *Status:* Rejected by author. The system must use 1 shared device split into 3 touch areas for the 3 players.
-* **Local Hotspot / Local Network (v1.0 Spec):**
-  - *Status:* Rejected. Cloud serverless backend (Supabase) remains the single source of truth.
-* **Client-Authoritative Timers:**
-  - *Status:* Rejected. Timers are anchored to server `clock_timestamp()`.
-
-## Key Decisions & Staging for Next Steps
-
-1. **Screen Layout Definition:** Establish UI boundaries and orientation (landscape vs. portrait) for the 3-player split layout on phones vs. tablets.
-2. **Timer Expiration Pump:** Finalize the fallback mechanism for resolving `expires_at` when both devices drop connectivity simultaneously.
-3. **Question Media Policy:** Determine whether media assets are strictly for personal/local testing or formatted for public store distribution.
+- **One device per player:** Rejected by author. Physical setup simplicity and avoiding per-player BYOD friction outweigh the ergonomic constraints of a shared screen.
+- **Server-side timer (pg_cron or Edge Function):** Rejected for v1. Adds infrastructure complexity; client-driven pump is sufficient for private low-frequency sessions.
+- **Local hotspot architecture (v1.0):** Rejected. Cloud server is the single source of truth for fairness and state persistence.
+- **Portrait orientation for Players Console:** Rejected by author. Landscape orientation gives each player a taller buzzer column and reduces accidental cross-player touches.
