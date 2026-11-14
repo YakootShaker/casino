@@ -169,7 +169,7 @@ CREATE TABLE game_states (
   state_version       BIGINT NOT NULL DEFAULT 0,
   current_question_id UUID REFERENCES questions(id),
   active_player_index INT,          -- 0,1,2 — who buzzed
-  locked_player_index INT,          -- excluded after wrong answer; NULL = nobody locked
+  locked_player_indices INT[] NOT NULL DEFAULT ARRAY[]::INT[], -- excluded after wrong answer(s) on current question
   buzz_expires_at     TIMESTAMPTZ,
   updated_at          TIMESTAMPTZ DEFAULT now()
 );
@@ -237,14 +237,13 @@ BEGIN
     RETURN jsonb_build_object('accepted', false, 'reason', 'wrong_phase');
   END IF;
 
-  IF v_state.locked_player_index = p_player_index THEN
+  IF p_player_index = ANY(v_state.locked_player_indices) THEN
     RETURN jsonb_build_object('accepted', false, 'reason', 'player_locked');
   END IF;
 
   UPDATE game_states SET
     phase               = 'buzzer_active',
     active_player_index = p_player_index,
-    locked_player_index = NULL,
     buzz_expires_at     = clock_timestamp() + INTERVAL '10 seconds'
   WHERE room_id = p_room_id;
 
@@ -272,11 +271,16 @@ BEGIN
     RETURN jsonb_build_object('transitioned', false);
   END IF;
 
+  -- Lock the player who timed out out of further buzzes on this question
+  IF v_state.active_player_index IS NOT NULL THEN
+    v_state.locked_player_indices := array_append(v_state.locked_player_indices, v_state.active_player_index);
+  END IF;
+
   UPDATE game_states SET
-    phase               = 'question_active',
-    active_player_index = NULL,
-    locked_player_index = NULL,
-    buzz_expires_at     = NULL
+    phase                 = CASE WHEN cardinality(v_state.locked_player_indices) >= 3 THEN 'question_active' ELSE 'question_active' END,
+    active_player_index   = NULL,
+    locked_player_indices = v_state.locked_player_indices,
+    buzz_expires_at       = NULL
   WHERE room_id = p_room_id;
 
   RETURN jsonb_build_object('transitioned', true);
@@ -525,15 +529,15 @@ On Android, `EncryptedSharedPreferences` (minSdkVersion 23) backs the storage. I
 
 ### Decisions Required Before Sprint 1 Begins
 
-| # | Decision | Options | Recommended |
+| # | Decision | Options | Status / Resolution |
 |---|---|---|---|
-| D1 | Wrong-answer behavior | (a) Reopen buzzer for other two players, (b) Reset question immediately | **(a) Reopen buzzer** — adds `locked_player_index`; more exciting gameplay; steal mechanic becomes natural |
-| D2 | Player name assignment | (a) Referee pre-game entry, (b) Console pre-game entry, (c) Fixed labels | **(a) Referee pre-game entry** — simplest UX; Referee knows the players |
-| D3 | No-buzz timeout | (a) Referee manually skips, (b) Automatic timer (e.g. 30s) | **(a) Manual skip** — v1 simplicity; Referee controls pacing |
-| D4 | Question ordering | (a) Referee picks category → random draw, (b) Fully random, (c) Sequential | **(a) Referee picks category** — gives game-night pacing control |
-| D5 | Question exhaustion | (a) Reshuffle and replay used questions, (b) Declare game-over | **(b) Game-over** — edge case in real play; real games end by score, not exhaustion |
-| D6 | Token storage | (a) Plaintext in DB, (b) sha256 hash in DB | **(b) sha256** — minimal security hardening at no meaningful cost |
-| D7 | Audio reveal | (a) Auto-play on question reveal, (b) Referee presses play | **(b) Referee presses play** — prevents network race conditions; Referee controls pacing |
+| D1 | Wrong-answer behavior | (a) Reopen buzzer for remaining players, (b) Reset question immediately | **Locked: (a) Reopen buzzer** — `locked_player_indices` tracks penalized players. When a player answers incorrectly (-1), buzzer reopens for remaining players to steal with a fresh 10s countdown. If all 3 fail or time out, question ends. |
+| D2 | Player name assignment | (a) Referee pre-game entry, (b) Console pre-game entry, (c) Fixed labels | **Locked: (a) Referee pre-game entry** — Referee enters the 3 player names on their screen before starting. |
+| D3 | No-buzz timeout | (a) Referee manually skips, (b) Automatic timer (e.g. 30s) | **Locked: (a) Manual skip** — Referee manually skips questions if no player buzzes. |
+| D4 | Question ordering | (a) Referee picks category → random draw, (b) Fully random, (c) Sequential | **Locked: (a) Referee picks category** — Referee selects category, server draws random unused question. |
+| D5 | Question exhaustion | (a) Reshuffle and replay used questions, (b) Declare game-over | **Locked: (b) Declare game-over** — Game ends if selected category questions are exhausted. |
+| D6 | Token storage | (a) Plaintext in DB, (b) sha256 hash in DB | **Locked: (b) sha256** — Store tokens as sha256 digests in Postgres. |
+| D7 | Audio reveal | (a) Auto-play on question reveal, (b) Referee presses play | **Locked: (b) Referee presses play** — Referee initiates audio playback manually. |
 
 ### Sprint 0: Infrastructure & Schema (Week 1)
 
