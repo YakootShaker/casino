@@ -1,43 +1,45 @@
 # Quiz Buzzer — 2-Device Architecture
 
 *   **Author:** YakootShaker
-*   **Status:** Draft
+*   **Status:** Approved (Production-Ready)
 *   **Date:** 2026-11-15
 
 --------------------------------------------------------------------------------
 
 ## Overview
 
-Quiz Buzzer is a real-time multiplayer trivia buzzer application built with Flutter and Supabase. The system operates on a fixed two-device topology per room:
-1. **Device 1 (Referee):** Hosts game control, question delivery (text, image, audio), reference answers, audio playback triggers, and score adjudication (+1 / −1).
-2. **Device 2 (Players Console):** A single landscape-oriented smartphone or tablet shared by three players, split into three equal vertical columns acting as large tap targets. No question content is shown on this screen.
+Quiz Buzzer is a real-time multiplayer trivia buzzer application built with Flutter and Supabase. The system operates on a dedicated two-device topology per room:
+1. **Device 1 (Referee Cockpit):** Hosts game flow control, question presentation (text, image, audio), reference answers, audio playback triggers, and manual score adjudication (+1 / −1).
+2. **Device 2 (Players Console):** A single landscape-oriented smartphone or tablet shared by three players, split into three equal vertical columns acting as large tap targets. No question content or answers are displayed on this screen.
 
-Game state, score logs, question pools, and authoritative turn deadlines reside in Supabase (Postgres, Realtime, and Storage). The Referee manually judges all spoken answers.
+Authoritative room state, score tracking, question catalogs, and turn deadlines reside in Supabase (Postgres, Realtime, and Storage). The Referee manually judges all spoken verbal answers, maintaining human pacing and social interaction.
 
 --------------------------------------------------------------------------------
 
 ## The Problem
 
 Standard party trivia games and digital buzzer apps suffer from four primary failure modes:
-1. **Network Latency Bias in BYOD Setup:** When each player uses their own phone over cellular or varying Wi-Fi connections, physical buzzer races are distorted by 50–200ms network round-trip discrepancies, giving unfair advantages to players on faster connections.
-2. **High Setup Friction:** Requiring every player at a social gathering to install an app, configure accounts, or pair over brittle local Wi-Fi hotspots creates cognitive overhead and delays gameplay.
-3. **Screen Clutter & Visual Misalignment:** Trying to display questions, images, answer options, and buzzer buttons simultaneously on small individual screens distracts players and causes accidental touches.
-4. **Timer Desynchronization & Frozen State:** Client-managed countdowns freeze when devices are backgrounded or disconnect, causing dispute over answer deadlines and game stalls.
+1. **Network Latency Bias in BYOD Setup:** When each player uses their own phone over cellular or variable Wi-Fi connections, physical buzzer races are distorted by 50–200ms network round-trip discrepancies, giving unfair advantages to players with faster connections.
+2. **High Setup Friction:** Requiring every player at a social gathering to install an app, configure accounts, or pair over unstable local Wi-Fi hotspots causes setup delays and user drop-off.
+3. **Screen Clutter & Visual Misalignment:** Attempting to display questions, images, answer options, and buzzer buttons simultaneously on small individual screens distracts players and causes accidental touches.
+4. **Timer Desynchronization & Runaway Game Loops:** Automated client timers that deduct points autonomously conflict with human verbal answers, and systems that automatically advance questions without human intermissions destroy living-room game pacing.
 
-Quiz Buzzer resolves these challenges by consolidating all three players onto a single shared landscape device with local hardware touch arbitration (zero network variance between players), restricting all question content to the Referee device, and anchoring all turn deadlines to authoritative server timestamps.
+Quiz Buzzer resolves these challenges by consolidating all three players onto a single shared landscape device with sub-frame local hardware touch arbitration (eliminating network variance between players), restricting all question content to the Referee device, and anchoring all turn deadlines to authoritative server timestamps with Referee-controlled pacing.
 
 --------------------------------------------------------------------------------
 
 ## Goals
 
 *   **Fixed 2-Device Room Topology:** Exactly one Referee device and one shared Players Console per game room, paired via a 6-digit numeric PIN.
-*   **Zero-Latency Hardware Touch Arbitration:** First-touch detection executed locally on the Players Console using raw pointer event listeners, immediately locking out adjacent columns before dispatching the server RPC.
-*   **Server-Authoritative 10-Second Turn Deadline:** Countdown deadlines anchored to Postgres `clock_timestamp()`. Turn expiration is invariant to client app suspension or network drops.
-*   **Steal Mechanic with Progressive Player Lock:** When a player answers incorrectly (−1), the buzzer reopens immediately for the remaining two players with a fresh 10-second countdown. If a second player fails, only the third player may attempt.
-*   **Content Isolation:** All question text, image assets, audio controls, reference answers, and judge notes appear exclusively on the Referee screen. The Players Console shows only three reactive buzzer columns.
-*   **Deterministic Role-Locked Reconnection:** Two unique cryptographic tokens (`referee_token`, `console_token`) issued upon room creation and stored in `flutter_secure_storage`. Only the two paired devices can reconnect to an in-progress session.
-*   **Silent Background Re-synchronization:** When a device returns from background or restores connectivity, a non-intrusive "Reconnecting..." overlay blocks interaction while state is fetched, auto-firing turn expiration if the deadline elapsed during disconnection.
-*   **Authoritative Audit Trail & Win Detection:** All score changes recorded in `score_log`. The Referee can manually adjust scores (±1). First player to reach 10 points wins.
+*   **Sub-Frame Local Hardware Touch Arbitration:** First-touch detection executed locally on the Players Console using raw pointer event listeners (`Listener(onPointerDown: ...)`), immediately locking out adjacent columns synchronously (< 16ms) before dispatching the server RPC.
+*   **Referee-Controlled Pacing (Two-Phase Turn Cycle):** Question presentation (`question_revealed`) is decoupled from buzzer activation (`buzzer_active`). The Referee reveals the clue, buffers media, and opens the buzzers when ready.
+*   **Server-Authoritative Turn Deadline:** 10-second countdown deadlines anchored to Postgres `clock_timestamp()`. Turn expiration is invariant to client app suspension or network drops.
+*   **Human-Centered Verbal Adjudication:** The Referee remains the sole arbiter of answer validity and timeouts. Timer completion prompts the Referee rather than autonomously docking points.
+*   **Steal Mechanic with Progressive Player Lock:** When a player answers incorrectly (−1), the buzzer reopens immediately for the remaining unlocked players. If a second player misses, only the third player may attempt.
+*   **Strict Content Isolation:** All question text, image assets, audio controls, reference answers, and judge notes appear exclusively on the Referee screen. The Players Console displays only reactive buzzer columns.
+*   **Role-Locked Anonymous Reconnection:** Bound by Supabase anonymous `auth.uid()` mapped directly to `rooms.referee_uid` and `rooms.console_uid`. Only the two paired devices can reconnect to an in-progress session.
+*   **Modal Disconnection Recovery:** When a device returns from background or restores connectivity, a modal "Reconnecting..." overlay halts user interaction while state is fetched, safely synchronizing timers.
+*   **Unified Realtime State Engine:** All mutable gameplay state and player scores reside in a single table (`game_states`), eliminating multi-table lock deadlocks and guaranteeing synchronized Realtime score updates.
 
 --------------------------------------------------------------------------------
 
@@ -46,76 +48,87 @@ Quiz Buzzer resolves these challenges by consolidating all three players onto a 
 *   **No Bring-Your-Own-Device (BYOD) for Individual Players:** Expanding beyond the 2-device topology is excluded in v1.
 *   **No User Accounts or Persistent Authentication:** No email, phone, or social login. Access is strictly anonymous.
 *   **No Offline or Local Mesh Mode:** Supabase cloud backend is required. Peer-to-peer / hotspot architecture from v1.0 is deprecated.
-*   **No In-App Question Editing:** Question authoring and asset management are conducted via external database scripts or administration tools.
+*   **No In-App Question Authoring:** Question authoring and asset management are conducted via external database scripts or administration tools.
 *   **No Automated Speech or Audio Recognition:** All spoken responses are evaluated manually by the Referee.
 *   **No Copyrighted Media:** Only public-domain and royalty-free images and audio clips are utilized for v1.
-*   **No Server-Side Background Cron / Daemon:** Turn expiration and state progression rely on client-driven idempotent RPCs with server time validation.
+*   **No Background Daemon / Cron Jobs:** Turn expiration and state progression rely on transactional client RPCs with server time validation.
 
 --------------------------------------------------------------------------------
 
 ## Open Questions
 
-*   *None.* All architectural decisions (D1–D7) were locked and approved during the ideation phase.
+*   *None.* All architectural tradeoffs (2-device room topology, client-driven turn resolution, local touch arbitration, and Referee-controlled pacing) are finalized.
 
 --------------------------------------------------------------------------------
 
 ## Critical User Journeys (CUJs)
 
-### CUJ 1: Room Creation, Pairing & Role Lock
+### CUJ 1: Room Creation, PIN Pairing & Role Lock
 
 *   **Given**: Referee device and Players Console device have the application installed and have internet access.
 *   **When**:
-    1. Referee opens the app, selects "Host Game", receives a 6-digit PIN, and enters names for Player 1, Player 2, and Player 3.
-    2. Players Console opens the app, enters the 6-digit PIN, and taps "Join as Players".
+    1. Referee selects "Host Game", receives a 6-digit PIN, enters names for Player 1, Player 2, and Player 3, and selects trivia categories.
+    2. Players Console opens the app, selects "Join Game", enters the 6-digit PIN on `PinEntryScreen`, and taps "Join".
 *   **Then**:
-    1. Server binds `referee_uid` and `console_uid` to the room row, returning SHA-256 validated session tokens stored in `flutter_secure_storage`.
-    2. The room transitions to `lobby`.
-    3. Any third device attempting to join with the same PIN is rejected with `room_full`.
+    1. Server binds `referee_uid` and `console_uid` to the room row via anonymous authentication tokens.
+    2. `game_states` initializes in `lobby`.
+    3. The Referee Cockpit dynamically updates to show "Console Connected" and enables the "Start Match" action.
+    4. Any third device attempting to join with the same PIN is rejected with error code `ROOM_ALREADY_CLAIMED`.
 
-### CUJ 2: Normal Question Cycle & Immediate Buzz
+### CUJ 2: Question Reveal & Buzzer Arming
 
-*   **Given**: Room is in `lobby`. Referee selects question categories and taps "Start Game".
+*   **Given**: Room is in `lobby` with both devices connected.
 *   **When**:
-    1. Server transitions to `question_active` and draws an unused question.
-    2. Question text/media appears on Referee screen.
-    3. Players Console displays three active colored buzzer columns.
-    4. Player 1 touches Column 1.
+    1. Referee taps "Start Match" (calling `start_game`).
+    2. Server transitions to `question_revealed`, drawing an unused question from `selected_categories`.
 *   **Then**:
-    1. Players Console triggers instant heavy haptic feedback, plays local SFX, and visually locks Columns 2 and 3 within the local UI thread.
-    2. Players Console calls `buzz(room_id, 0)`.
-    3. Server verifies `phase = 'question_active'`, sets `phase = 'buzzer_active'`, `active_player_index = 0`, and `buzz_expires_at = clock_timestamp() + 10s`.
-    4. Both devices receive the state update via Realtime and display Player 1's active 10-second countdown.
+    1. Referee Cockpit receives full question content, reference answers, and audio player controls.
+    2. Players Console receives the state update and displays three colored buzzer columns in a disarmed "Listening" state (ignoring taps).
+    3. Referee reads the question (or triggers audio) and taps "Open Buzzer" (calling `arm_buzzer`).
+    4. Server sets `phase = 'buzzer_active'`. Players Console buzzers become live and interactive.
 
-### CUJ 3: Wrong Answer, Score Deduction & Steal Reopen
+### CUJ 3: Sub-Frame Buzz, Turn Countdown & Correct Answer
 
-*   **Given**: Player 1 has buzzed in and the countdown is running. Player 1 gives an incorrect verbal answer.
-*   **When**: Referee taps "Incorrect (−1)".
+*   **Given**: Room is in `buzzer_active`.
+*   **When**:
+    1. Player 1 touches Column 1 on the Players Console.
 *   **Then**:
-    1. Server deducts 1 point from Player 1 in `rooms.player_scores`, records the event in `score_log`, and appends `0` to `locked_player_indices`.
-    2. Because remaining players exist (`locked_player_indices` length < 3), server transitions phase back to `question_active` with `active_player_index = NULL` and `buzz_expires_at = NULL`.
-    3. Players Console receives update: Column 1 remains visually disabled/dimmed; Columns 2 and 3 reopen for buzz.
-    4. Player 2 touches Column 2: a fresh 10-second countdown begins for Player 2.
+    1. Players Console triggers immediate subtle haptic confirmation, locks Columns 2 and 3 synchronously in the UI thread (< 16ms), and dispatches `buzz(room_id, 0)`.
+    2. Server validates `phase = 'buzzer_active'`, sets `phase = 'player_answering'`, `active_player_index = 0`, and `buzz_expires_at = clock_timestamp() + 10s`.
+    3. Both devices receive the state update: Player 1's column flashes with signature color, and a 10-second countdown runs.
+    4. Player 1 speaks the answer. Referee taps "Correct (+1)" (calling `judge_mark(room_id, 'correct')`).
+    5. Server increments Player 1's score to 1, logs the event in `score_log`, sets `phase = 'question_revealed'`, and selects the next question.
 
-### CUJ 4: Device Suspension & Disconnection Recovery
+### CUJ 4: Wrong Answer, Score Deduction & Steal Reopen
 
-*   **Given**: Player 2 has buzzed in. 6 seconds remain on the countdown. The Players Console is backgrounded or network is interrupted.
-*   **When**: Players Console is brought back to the foreground 15 seconds later.
+*   **Given**: Player 1 has buzzed in (`player_answering`) and gives an incorrect answer.
+*   **When**: Referee taps "Incorrect (−1)" (calling `judge_mark(room_id, 'incorrect')`).
 *   **Then**:
-    1. The app immediately displays a full-screen "Reconnecting..." overlay.
-    2. App fetches current state via REST API and calculates that `clock_timestamp() > buzz_expires_at`.
-    3. App calls `expire_turn(room_id)`.
-    4. Server atomically deducts 1 point from Player 2, logs timeout event, appends `1` to `locked_player_indices`, and resets active turn.
-    5. App removes the "Reconnecting..." overlay and resumes display in sync with current server state.
+    1. Server deducts 1 point from Player 1, records the event in `score_log`, and appends `0` to `locked_player_indices`.
+    2. Server sets `phase = 'buzzer_active'`, `active_player_index = NULL`, and `buzz_expires_at = NULL`.
+    3. Players Console receives update: Column 1 remains visually dimmed and disabled; Columns 2 and 3 reopen for buzzes.
+    4. Local touch lockout resets. Player 2 touches Column 2: a fresh 10-second countdown begins for Player 2.
+    5. If all three players answer incorrectly or time out, the server automatically transitions to `question_revealed` with the next question.
 
-### CUJ 5: Match Conclusion & Victory State
+### CUJ 5: Timer Expiration & Human Confirmation
 
-*   **Given**: Player 3 has 9 points. Room is in `buzzer_active` with Player 3 answering.
+*   **Given**: Player 2 has buzzed in. 10 seconds elapse while Player 2 hesitates.
+*   **When**: The 10-second timer hits zero on both devices.
+*   **Then**:
+    1. Both devices play a timeout chime. Players Console disables Column 2.
+    2. Client calls `expire_turn(room_id)`.
+    3. Server updates `phase = 'judge_evaluating'`, freezing the countdown without docking points.
+    4. The Referee Cockpit highlights evaluation choices: "Timeout (-1)" or "Spoke in Time (+1)".
+    5. Referee confirms "Timeout (-1)". Server deducts 1 point, adds Player 2 to `locked_player_indices`, and reopens buzzers for Player 3.
+
+### CUJ 6: Match Conclusion & Victory State
+
+*   **Given**: Player 3 has 9 points. Room is in `player_answering` with Player 3 answering.
 *   **When**: Referee taps "Correct (+1)".
 *   **Then**:
-    1. Server atomically increments Player 3's score to 10.
-    2. Server detects `player_scores[2] >= 10`, sets `phase = 'game_over'`, and marks `winner_player_index = 2`.
-    3. Referee and Players Console transition to celebration screen displaying final scores, question statistics, and shareable match summary.
-
+    1. Server increments Player 3's score to 10.
+    2. Server detects `player_scores[3] >= 10`, sets `phase = 'game_over'`, and sets `winner_player_index = 2`.
+    3. Both screens display `GameOverDialog` showing final scores, winner podium, and shareable summary card.
 
 --------------------------------------------------------------------------------
 
@@ -123,12 +136,10 @@ Quiz Buzzer resolves these challenges by consolidating all three players onto a 
 
 ### 1. High-Level System Architecture
 
-Quiz Buzzer is structured as a dual-role distributed system communicating through Supabase serverless infrastructure:
-
 ```mermaid
 flowchart TD
     subgraph Clients["Flutter Clients (Two Physical Devices)"]
-        subgraph Dev1["Device 1: Referee"]
+        subgraph Dev1["Device 1: Referee Cockpit"]
             RefUI["Referee UI (Question, Answer, Controls)"]
             RefState["State Manager (Riverpod)"]
             RefAudio["Audio Controller (just_audio)"]
@@ -141,69 +152,82 @@ flowchart TD
     end
 
     subgraph Supabase["Supabase Cloud Platform"]
-        Realtime["Realtime Engine (Postgres Changes)"]
-        RPC["Transactional RPC Functions (PL/pgSQL)"]
+        Realtime["Realtime Engine (Postgres Changes on game_states)"]
+        RPC["Transactional RPC Functions (SECURITY DEFINER)"]
         Postgres[(PostgreSQL Database)]
         Storage["Storage CDN (Public Question Media)"]
     end
 
-    Dev1 -->|"Host Room / RPCs"| RPC
-    Dev2 -->|"Join Room / buzz() RPC"| RPC
-    RPC -->|"Atomic FOR UPDATE Mutations"| Postgres
-    Postgres -->|"Triggers & Change Events"| Realtime
-    Realtime -.->|"WebSocket Updates (state_version)"| RefState
-    Realtime -.->|"WebSocket Updates (state_version)"| ConsoleState
+    Dev1 -->|"Host / start_game / judge_mark"| RPC
+    Dev2 -->|"Join / buzz() / expire_turn()"| RPC
+    RPC -->|"Atomic FOR UPDATE on game_states"| Postgres
+    Postgres -->|"trg_state_version Trigger"| Realtime
+    Realtime -.->|"WebSocket Broadcasts (state_version)"| RefState
+    Realtime -.->|"WebSocket Broadcasts (state_version)"| ConsoleState
     Storage -->|"Cache Images & Audio"| RefUI
     Storage -->|"Cache Audio"| RefAudio
 ```
 
-### 2. State Machine & Lifecycle
+### 2. Authoritative State Machine & Lifecycle
 
-The room state advances through five formally defined phases:
+The room state advances through five persisted database phases:
 
 ```
-[lobby] ───────────► [question_active] ───────────► [buzzer_active]
+[lobby] ───────────► [question_revealed] ───────────► [buzzer_active]
                           ▲                                │
-                          │ (Steal or Wrong Answer)        │ (Correct Answer / Win Check)
-                          │ (Remaining Players > 0)        ▼
-                          ├───────────────────────── [judge_evaluating]
+                          │ (Next Question)                │ (First Touch Registered)
+                          │ (All 3 Players Locked)         ▼
+                          ├───────────────────────── [player_answering]
                           │                                │
-                          ▼ (All 3 Players Locked          ▼ (Player Score >= 10)
-                          │  or Question Skipped)     [game_over]
-                          └──► [question_active]
+                          │ (Wrong Answer / Steal Reopen)  │ (Timer Elapses)
+                          │ ◄──────────────────────────────▼
+                          │                        [judge_evaluating]
+                          │                                │
+                          ▼ (Player Score >= 10)           │ (Referee Confirms Verdict)
+                      [game_over] ◄────────────────────────┘
 ```
 
-#### Detailed Phase Transitions:
-*   `lobby`: Room created, waiting for Console device to join. Referee assigns player names and selects categories.
-*   `question_active`: Active question selected. Referee screen displays question content and reference answers. On Players Console, all columns not present in `locked_player_indices` are active and listening for touch events.
-*   `buzzer_active`: A player has successfully registered a buzz. The active column pulses; non-active columns are dimmed. Authoritative 10-second countdown runs (`buzz_expires_at`).
-*   `judge_evaluating`: Optional sub-phase or transient state while the Referee enters a verdict, or directly resolved inside `judge_mark()` / `expire_turn()`.
-*   `game_over`: A player reaches 10 points or all categories are exhausted. Buzzers locked permanently. Final score cards and summary card displayed.
+#### State Transition Matrix
+
+| Source Phase | Trigger / Action | Guard / Condition | Target Phase | Side Effects |
+|---|---|---|---|---|
+| `lobby` | `start_game` | `auth.uid() = referee_uid` AND `console_uid IS NOT NULL` | `question_revealed` | Draws first question; sets `current_question_id`. |
+| `question_revealed` | `arm_buzzer` | `auth.uid() = referee_uid` | `buzzer_active` | Unlocks non-penalized buzzer columns on console. |
+| `buzzer_active` | `buzz(player)` | `auth.uid() = console_uid` AND `player NOT IN locked_player_indices` | `player_answering` | Locks columns; sets `active_player_index` & `buzz_expires_at = clock_timestamp() + 10s`. Ducks audio. |
+| `player_answering` | `judge_mark('correct')` | `auth.uid() = referee_uid` | `question_revealed` (or `game_over`) | Awards +1 point. If score >= 10, sets `game_over`. Else draws next question. |
+| `player_answering` | `judge_mark('incorrect')` | `auth.uid() = referee_uid` | `buzzer_active` (or `question_revealed`) | Deducts -1 point; appends player to `locked_player_indices`. If < 3 locked, reopens buzzers. Else next question. |
+| `player_answering` | `expire_turn` | `clock_timestamp() >= buzz_expires_at` | `judge_evaluating` | Freezes countdown; prompts Referee for timeout confirmation. |
+| `judge_evaluating` | `judge_mark('incorrect')` | `auth.uid() = referee_uid` | `buzzer_active` (or `question_revealed`) | Deducts -1 timeout penalty; appends player to `locked_player_indices`. Reopens steal or advances. |
+| `judge_evaluating` | `judge_mark('correct')` | `auth.uid() = referee_uid` | `question_revealed` (or `game_over`) | Awards +1 point (referee confirms player spoke in time). Next question or game over. |
+| Any active | `skip_question` | `auth.uid() = referee_uid` | `question_revealed` (or `game_over`) | Cancels turn without penalty; draws next question. |
+
+--------------------------------------------------------------------------------
 
 ### 3. Data Model & Database Schema
 
-The database design enforces relational consistency, cascading cleanups, and atomic concurrency guards:
+All mutable session state is consolidated into `game_states` to eliminate multi-table lock deadlocks and guarantee unified Realtime broadcasts:
 
 ```sql
 -- Extensions
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
--- 1. Rooms Table
+-- 1. Rooms Table (Static Room Metadata & Lifecycle)
 CREATE TABLE rooms (
   id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  room_pin            VARCHAR(6) NOT NULL UNIQUE,
-  referee_token_hash  TEXT NOT NULL,
-  console_token_hash  TEXT,
-  referee_uid         UUID REFERENCES auth.users(id),
+  room_pin            VARCHAR(6) NOT NULL,
+  referee_uid         UUID NOT NULL REFERENCES auth.users(id),
   console_uid         UUID REFERENCES auth.users(id),
-  player_names        TEXT[] NOT NULL DEFAULT ARRAY['Player 1', 'Player 2', 'Player 3'],
-  player_scores       INT[] NOT NULL DEFAULT ARRAY[0, 0, 0],
   selected_categories TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
   created_at          TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
   room_expires_at     TIMESTAMPTZ NOT NULL DEFAULT (clock_timestamp() + INTERVAL '4 hours')
 );
 
--- 2. Questions Bank
+-- Partial Unique Index (Prevents Collisions While Allowing Expired Room Re-Use)
+CREATE UNIQUE INDEX idx_rooms_active_pin 
+  ON rooms(room_pin) 
+  WHERE room_expires_at > clock_timestamp();
+
+-- 2. Questions Bank (Global Catalog)
 CREATE TABLE questions (
   id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   category         TEXT NOT NULL,
@@ -225,12 +249,14 @@ CREATE TABLE room_questions (
   PRIMARY KEY (room_id, question_id)
 );
 
--- 4. Game States Table (1:1 with Rooms)
+-- 4. Game States Table (Unified Mutable Session State)
 CREATE TABLE game_states (
   room_id               UUID PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
   phase                 TEXT NOT NULL DEFAULT 'lobby' 
-                        CHECK (phase IN ('lobby', 'question_active', 'buzzer_active', 'game_over')),
+                        CHECK (phase IN ('lobby', 'question_revealed', 'buzzer_active', 'player_answering', 'judge_evaluating', 'game_over')),
   state_version         BIGINT NOT NULL DEFAULT 0,
+  player_names          TEXT[] NOT NULL DEFAULT ARRAY['Player 1', 'Player 2', 'Player 3'],
+  player_scores         INT[] NOT NULL DEFAULT ARRAY[0, 0, 0],
   current_question_id   UUID REFERENCES questions(id),
   active_player_index   INT CHECK (active_player_index IN (0, 1, 2)),
   locked_player_indices INT[] NOT NULL DEFAULT ARRAY[]::INT[],
@@ -239,6 +265,12 @@ CREATE TABLE game_states (
   updated_at            TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
 );
 
+-- Enable Replica Identity for Full Row Delivery under RLS
+ALTER TABLE game_states REPLICA IDENTITY FULL;
+
+-- Add Table to Supabase Realtime Publication
+ALTER PUBLICATION supabase_realtime ADD TABLE game_states;
+
 -- 5. Score Event Audit Log
 CREATE TABLE score_log (
   id           BIGSERIAL PRIMARY KEY,
@@ -246,14 +278,13 @@ CREATE TABLE score_log (
   question_id  UUID REFERENCES questions(id),
   player_index INT NOT NULL CHECK (player_index IN (0, 1, 2)),
   delta        INT NOT NULL,
-  reason       TEXT NOT NULL CHECK (reason IN ('correct', 'incorrect', 'timeout', 'manual_adjust')),
+  reason       TEXT NOT NULL CHECK (reason IN ('correct', 'incorrect', 'timeout', 'manual_adjust', 'skip')),
   created_at   TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
 );
 
 -- Indexes for Fast Lookups
-CREATE INDEX idx_rooms_pin ON rooms(room_pin);
-CREATE INDEX idx_room_questions_room ON room_questions(room_id);
 CREATE INDEX idx_questions_category ON questions(category);
+CREATE INDEX idx_room_questions_room ON room_questions(room_id);
 CREATE INDEX idx_score_log_room ON score_log(room_id);
 
 -- Auto-Increment Trigger for state_version and updated_at
@@ -271,9 +302,11 @@ CREATE TRIGGER trg_state_version
   FOR EACH ROW EXECUTE FUNCTION increment_state_version();
 ```
 
+--------------------------------------------------------------------------------
+
 ### 4. Authoritative Server RPCs
 
-All mutations are conducted via transactional PL/pgSQL functions using `SECURITY DEFINER` and row-level `FOR UPDATE` locking:
+All transactional operations execute with `SECURITY DEFINER`, search path hardening, caller identity assertions (`auth.uid()`), and strict single-table `FOR UPDATE` locking on `game_states`:
 
 #### 4.1 Room Creation (`create_room`)
 ```sql
@@ -281,13 +314,14 @@ CREATE OR REPLACE FUNCTION create_room(
   p_categories TEXT[],
   p_player_names TEXT[]
 )
-RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER AS $$
+RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
   v_room_id UUID;
   v_pin VARCHAR(6);
-  v_ref_raw_token TEXT;
-  v_ref_token_hash TEXT;
 BEGIN
+  -- Purge expired rooms to free PIN keyspace
+  DELETE FROM rooms WHERE room_expires_at <= clock_timestamp();
+
   -- Generate unique 6-digit numeric PIN
   LOOP
     v_pin := lpad(floor(random() * 1000000)::TEXT, 6, '0');
@@ -296,22 +330,17 @@ BEGIN
     );
   END LOOP;
 
-  v_ref_raw_token := encode(gen_random_bytes(32), 'hex');
-  v_ref_token_hash := encode(digest(v_ref_raw_token, 'sha256'), 'hex');
+  INSERT INTO rooms (room_pin, referee_uid, selected_categories)
+  VALUES (v_pin, auth.uid(), p_categories)
+  RETURNING id INTO v_room_id;
 
-  INSERT INTO rooms (
-    room_pin, referee_token_hash, referee_uid, player_names, selected_categories
-  ) VALUES (
-    v_pin, v_ref_token_hash, auth.uid(), p_player_names, p_categories
-  ) RETURNING id INTO v_room_id;
-
-  INSERT INTO game_states (room_id, phase)
-  VALUES (v_room_id, 'lobby');
+  INSERT INTO game_states (room_id, phase, player_names)
+  VALUES (v_room_id, 'lobby', p_player_names);
 
   RETURN jsonb_build_object(
+    'success', true,
     'room_id', v_room_id,
-    'room_pin', v_pin,
-    'referee_token', v_ref_raw_token
+    'room_pin', v_pin
   );
 END;
 $$;
@@ -319,75 +348,161 @@ $$;
 
 #### 4.2 Room Join (`join_room`)
 ```sql
-CREATE OR REPLACE FUNCTION join_room(
-  p_pin VARCHAR(6),
-  p_role TEXT,
-  p_token TEXT DEFAULT NULL
-)
-RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER AS $$
+CREATE OR REPLACE FUNCTION join_room(p_pin VARCHAR(6))
+RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
   v_room rooms;
-  v_console_raw_token TEXT;
-  v_console_token_hash TEXT;
+  v_state game_states;
 BEGIN
   SELECT * INTO v_room FROM rooms 
-  WHERE room_pin = p_pin AND room_expires_at > clock_timestamp();
+  WHERE room_pin = p_pin AND room_expires_at > clock_timestamp()
+  FOR UPDATE;
 
   IF NOT FOUND THEN
     RETURN jsonb_build_object('success', false, 'error', 'ROOM_NOT_FOUND');
   END IF;
 
-  -- Reconnection path with existing token
-  IF p_token IS NOT NULL THEN
-    IF p_role = 'referee' AND v_room.referee_token_hash = encode(digest(p_token, 'sha256'), 'hex') THEN
-      UPDATE rooms SET referee_uid = auth.uid() WHERE id = v_room.id;
-      RETURN jsonb_build_object('success', true, 'room_id', v_room.id, 'role', 'referee');
-    ELSIF p_role = 'console' AND v_room.console_token_hash = encode(digest(p_token, 'sha256'), 'hex') THEN
-      UPDATE rooms SET console_uid = auth.uid() WHERE id = v_room.id;
-      RETURN jsonb_build_object('success', true, 'room_id', v_room.id, 'role', 'console');
-    ELSE
-      RETURN jsonb_build_object('success', false, 'error', 'INVALID_TOKEN');
-    END IF;
-  END IF;
-
-  -- Initial Console Join
-  IF p_role = 'console' THEN
-    IF v_room.console_token_hash IS NOT NULL THEN
-      RETURN jsonb_build_object('success', false, 'error', 'ROOM_ALREADY_CLAIMED');
-    END IF;
-
-    v_console_raw_token := encode(gen_random_bytes(32), 'hex');
-    v_console_token_hash := encode(digest(v_console_raw_token, 'sha256'), 'hex');
-
-    UPDATE rooms SET
-      console_token_hash = v_console_token_hash,
-      console_uid = auth.uid()
-    WHERE id = v_room.id;
-
+  -- Reconnection check for existing paired console
+  IF v_room.console_uid IS NOT NULL AND v_room.console_uid = auth.uid() THEN
+    SELECT * INTO v_state FROM game_states WHERE room_id = v_room.id;
     RETURN jsonb_build_object(
       'success', true,
       'room_id', v_room.id,
-      'role', 'console',
-      'console_token', v_console_raw_token
+      'player_names', v_state.player_names,
+      'reconnected', true
     );
   END IF;
 
-  RETURN jsonb_build_object('success', false, 'error', 'UNAUTHORIZED_ROLE');
+  -- Initial Console Pairing
+  IF v_room.console_uid IS NOT NULL THEN
+    RETURN jsonb_build_object('success', false, 'error', 'ROOM_ALREADY_CLAIMED');
+  END IF;
+
+  UPDATE rooms SET console_uid = auth.uid() WHERE id = v_room.id;
+
+  -- Touch game_states to notify Referee Cockpit that console paired
+  UPDATE game_states SET updated_at = clock_timestamp() WHERE room_id = v_room.id
+  RETURNING * INTO v_state;
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'room_id', v_room.id,
+    'player_names', v_state.player_names,
+    'reconnected', false
+  );
 END;
 $$;
 ```
 
-#### 4.3 Atomic Buzzer Press (`buzz`)
+#### 4.3 Match Start (`start_game`)
 ```sql
-CREATE OR REPLACE FUNCTION buzz(p_room_id UUID, p_player_index INT)
-RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER AS $$
+CREATE OR REPLACE FUNCTION start_game(p_room_id UUID, p_category TEXT DEFAULT NULL)
+RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
+  v_room rooms;
+  v_state game_states;
+  v_question questions;
+  v_chosen_cat TEXT;
+BEGIN
+  SELECT * INTO v_room FROM rooms WHERE id = p_room_id;
+  IF v_room.referee_uid <> auth.uid() THEN
+    RAISE EXCEPTION 'UNAUTHORIZED_REFEREE';
+  END IF;
+
+  SELECT * INTO v_state FROM game_states WHERE room_id = p_room_id FOR UPDATE;
+  IF v_state.phase <> 'lobby' THEN
+    RETURN jsonb_build_object('success', false, 'error', 'NOT_IN_LOBBY');
+  END IF;
+
+  v_chosen_cat := COALESCE(p_category, v_room.selected_categories[1]);
+
+  -- Select initial question
+  SELECT * INTO v_question FROM questions q
+  WHERE q.category = v_chosen_cat
+    AND q.id NOT IN (SELECT question_id FROM room_questions WHERE room_id = p_room_id)
+  ORDER BY random() LIMIT 1;
+
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('success', false, 'error', 'NO_QUESTIONS_AVAILABLE');
+  END IF;
+
+  INSERT INTO room_questions (room_id, question_id) VALUES (p_room_id, v_question.id);
+
+  UPDATE game_states SET
+    phase = 'question_revealed',
+    current_question_id = v_question.id,
+    active_player_index = NULL,
+    locked_player_indices = ARRAY[]::INT[],
+    buzz_expires_at = NULL
+  WHERE room_id = p_room_id;
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'question', jsonb_build_object(
+      'id', v_question.id,
+      'category', v_question.category,
+      'question_type', v_question.question_type,
+      'question_text', v_question.question_text,
+      'image_url', v_question.image_url,
+      'audio_url', v_question.audio_url,
+      'reference_answer', v_question.reference_answer,
+      'judge_notes', v_question.judge_notes
+    )
+  );
+END;
+$$;
+```
+
+#### 4.4 Buzzer Arming (`arm_buzzer`)
+```sql
+CREATE OR REPLACE FUNCTION arm_buzzer(p_room_id UUID)
+RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+DECLARE
+  v_room rooms;
   v_state game_states;
 BEGIN
-  SELECT * INTO v_state FROM game_states
-  WHERE room_id = p_room_id FOR UPDATE;
+  SELECT * INTO v_room FROM rooms WHERE id = p_room_id;
+  IF v_room.referee_uid <> auth.uid() THEN
+    RAISE EXCEPTION 'UNAUTHORIZED_REFEREE';
+  END IF;
 
-  IF v_state.phase <> 'question_active' THEN
+  SELECT * INTO v_state FROM game_states WHERE room_id = p_room_id FOR UPDATE;
+  IF v_state.phase <> 'question_revealed' THEN
+    RETURN jsonb_build_object('success', false, 'error', 'NOT_IN_QUESTION_REVEALED');
+  END IF;
+
+  UPDATE game_states SET
+    phase = 'buzzer_active',
+    active_player_index = NULL,
+    buzz_expires_at = NULL
+  WHERE room_id = p_room_id;
+
+  RETURN jsonb_build_object('success', true);
+END;
+$$;
+```
+
+#### 4.5 Atomic Buzzer Press (`buzz`)
+```sql
+CREATE OR REPLACE FUNCTION buzz(p_room_id UUID, p_player_index INT)
+RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+DECLARE
+  v_room rooms;
+  v_state game_states;
+  v_expires TIMESTAMPTZ;
+BEGIN
+  SELECT * INTO v_room FROM rooms WHERE id = p_room_id;
+  IF v_room.console_uid <> auth.uid() THEN
+    RAISE EXCEPTION 'UNAUTHORIZED_CONSOLE';
+  END IF;
+
+  IF p_player_index NOT IN (0, 1, 2) THEN
+    RETURN jsonb_build_object('accepted', false, 'reason', 'INVALID_PLAYER');
+  END IF;
+
+  SELECT * INTO v_state FROM game_states WHERE room_id = p_room_id FOR UPDATE;
+
+  IF v_state.phase <> 'buzzer_active' THEN
     RETURN jsonb_build_object('accepted', false, 'reason', 'WRONG_PHASE');
   END IF;
 
@@ -395,58 +510,65 @@ BEGIN
     RETURN jsonb_build_object('accepted', false, 'reason', 'PLAYER_LOCKED');
   END IF;
 
+  v_expires := clock_timestamp() + INTERVAL '10 seconds';
+
   UPDATE game_states SET
-    phase               = 'buzzer_active',
+    phase               = 'player_answering',
     active_player_index = p_player_index,
-    buzz_expires_at     = clock_timestamp() + INTERVAL '10 seconds'
+    buzz_expires_at     = v_expires
   WHERE room_id = p_room_id;
 
   RETURN jsonb_build_object(
     'accepted', true,
     'active_player', p_player_index,
-    'expires_at', (clock_timestamp() + INTERVAL '10 seconds')
+    'expires_at', v_expires
   );
 END;
 $$;
 ```
 
-#### 4.4 Judgment Evaluation (`judge_mark`)
+#### 4.6 Judgment Evaluation (`judge_mark`)
 ```sql
 CREATE OR REPLACE FUNCTION judge_mark(
   p_room_id UUID, 
-  p_verdict TEXT -- 'correct' or 'incorrect'
+  p_verdict TEXT, -- 'correct' or 'incorrect'
+  p_category TEXT DEFAULT NULL
 )
-RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER AS $$
+RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
-  v_state game_states;
   v_room rooms;
+  v_state game_states;
   v_player INT;
   v_scores INT[];
   v_locked INT[];
-  v_new_q UUID;
+  v_new_q questions;
+  v_winner INT;
 BEGIN
-  SELECT * INTO v_state FROM game_states WHERE room_id = p_room_id FOR UPDATE;
-  SELECT * INTO v_room FROM rooms WHERE id = p_room_id FOR UPDATE;
+  SELECT * INTO v_room FROM rooms WHERE id = p_room_id;
+  IF v_room.referee_uid <> auth.uid() THEN
+    RAISE EXCEPTION 'UNAUTHORIZED_REFEREE';
+  END IF;
 
-  IF v_state.phase <> 'buzzer_active' THEN
-    RETURN jsonb_build_object('success', false, 'reason', 'NOT_IN_BUZZER_ACTIVE');
+  SELECT * INTO v_state FROM game_states WHERE room_id = p_room_id FOR UPDATE;
+
+  IF v_state.phase NOT IN ('player_answering', 'judge_evaluating') THEN
+    RETURN jsonb_build_object('success', false, 'error', 'INVALID_PHASE_FOR_JUDGING');
   END IF;
 
   v_player := v_state.active_player_index;
-  v_scores := v_room.player_scores;
+  v_scores := v_state.player_scores;
 
   IF p_verdict = 'correct' THEN
-    -- Award +1 Point
     v_scores[v_player + 1] := v_scores[v_player + 1] + 1;
-    UPDATE rooms SET player_scores = v_scores WHERE id = p_room_id;
 
     INSERT INTO score_log (room_id, question_id, player_index, delta, reason)
     VALUES (p_room_id, v_state.current_question_id, v_player, 1, 'correct');
 
-    -- Win Condition Check (>= 10 points)
+    -- Win Condition: First player to 10 points
     IF v_scores[v_player + 1] >= 10 THEN
       UPDATE game_states SET
         phase = 'game_over',
+        player_scores = v_scores,
         winner_player_index = v_player,
         active_player_index = NULL,
         buzz_expires_at = NULL
@@ -455,22 +577,25 @@ BEGIN
       RETURN jsonb_build_object('success', true, 'outcome', 'GAME_OVER', 'winner', v_player);
     END IF;
 
-    -- Pick Next Question
-    SELECT q.id INTO v_new_q FROM questions q
-    WHERE q.category = ANY(v_room.selected_categories)
+    -- Pick Next Question for question_revealed
+    SELECT * INTO v_new_q FROM questions q
+    WHERE q.category = COALESCE(p_category, v_room.selected_categories[1])
       AND q.id NOT IN (SELECT question_id FROM room_questions WHERE room_id = p_room_id)
     ORDER BY random() LIMIT 1;
 
-    IF v_new_q IS NULL THEN
-      UPDATE game_states SET phase = 'game_over', active_player_index = NULL, buzz_expires_at = NULL WHERE room_id = p_room_id;
-      RETURN jsonb_build_object('success', true, 'outcome', 'QUESTIONS_EXHAUSTED');
+    IF NOT FOUND THEN
+      -- Handle question exhaustion by finding top scorer
+      SELECT array_position(v_scores, max(s)) - 1 INTO v_winner FROM unnest(v_scores) s;
+      UPDATE game_states SET phase = 'game_over', player_scores = v_scores, winner_player_index = v_winner WHERE room_id = p_room_id;
+      RETURN jsonb_build_object('success', true, 'outcome', 'QUESTIONS_EXHAUSTED', 'winner', v_winner);
     END IF;
 
-    INSERT INTO room_questions (room_id, question_id) VALUES (p_room_id, v_new_q);
+    INSERT INTO room_questions (room_id, question_id) VALUES (p_room_id, v_new_q.id);
 
     UPDATE game_states SET
-      phase = 'question_active',
-      current_question_id = v_new_q,
+      phase = 'question_revealed',
+      player_scores = v_scores,
+      current_question_id = v_new_q.id,
       active_player_index = NULL,
       locked_player_indices = ARRAY[]::INT[],
       buzz_expires_at = NULL
@@ -479,32 +604,32 @@ BEGIN
     RETURN jsonb_build_object('success', true, 'outcome', 'NEXT_QUESTION');
 
   ELSIF p_verdict = 'incorrect' THEN
-    -- Deduct -1 Point
     v_scores[v_player + 1] := v_scores[v_player + 1] - 1;
-    UPDATE rooms SET player_scores = v_scores WHERE id = p_room_id;
 
     INSERT INTO score_log (room_id, question_id, player_index, delta, reason)
     VALUES (p_room_id, v_state.current_question_id, v_player, -1, 'incorrect');
 
     v_locked := array_append(v_state.locked_player_indices, v_player);
 
-    -- If all 3 players locked, advance to next question
+    -- If all 3 players missed, advance to next question
     IF cardinality(v_locked) >= 3 THEN
-      SELECT q.id INTO v_new_q FROM questions q
-      WHERE q.category = ANY(v_room.selected_categories)
+      SELECT * INTO v_new_q FROM questions q
+      WHERE q.category = COALESCE(p_category, v_room.selected_categories[1])
         AND q.id NOT IN (SELECT question_id FROM room_questions WHERE room_id = p_room_id)
       ORDER BY random() LIMIT 1;
 
-      IF v_new_q IS NULL THEN
-        UPDATE game_states SET phase = 'game_over', active_player_index = NULL, buzz_expires_at = NULL WHERE room_id = p_room_id;
-        RETURN jsonb_build_object('success', true, 'outcome', 'QUESTIONS_EXHAUSTED');
+      IF NOT FOUND THEN
+        SELECT array_position(v_scores, max(s)) - 1 INTO v_winner FROM unnest(v_scores) s;
+        UPDATE game_states SET phase = 'game_over', player_scores = v_scores, winner_player_index = v_winner WHERE room_id = p_room_id;
+        RETURN jsonb_build_object('success', true, 'outcome', 'QUESTIONS_EXHAUSTED', 'winner', v_winner);
       END IF;
 
-      INSERT INTO room_questions (room_id, question_id) VALUES (p_room_id, v_new_q);
+      INSERT INTO room_questions (room_id, question_id) VALUES (p_room_id, v_new_q.id);
 
       UPDATE game_states SET
-        phase = 'question_active',
-        current_question_id = v_new_q,
+        phase = 'question_revealed',
+        player_scores = v_scores,
+        current_question_id = v_new_q.id,
         active_player_index = NULL,
         locked_player_indices = ARRAY[]::INT[],
         buzz_expires_at = NULL
@@ -512,9 +637,10 @@ BEGIN
 
       RETURN jsonb_build_object('success', true, 'outcome', 'ALL_LOCKED_NEXT_QUESTION');
     ELSE
-      -- Reopen buzzer for remaining players
+      -- Reopen buzzer for remaining players to steal
       UPDATE game_states SET
-        phase = 'question_active',
+        phase = 'buzzer_active',
+        player_scores = v_scores,
         active_player_index = NULL,
         locked_player_indices = v_locked,
         buzz_expires_at = NULL
@@ -524,103 +650,76 @@ BEGIN
     END IF;
   END IF;
 
-  RETURN jsonb_build_object('success', false, 'reason', 'INVALID_VERDICT');
+  RETURN jsonb_build_object('success', false, 'error', 'INVALID_VERDICT');
 END;
 $$;
 ```
 
-#### 4.5 Idempotent Turn Expiration (`expire_turn`)
+#### 4.7 Turn Expiration Trigger (`expire_turn`)
 ```sql
 CREATE OR REPLACE FUNCTION expire_turn(p_room_id UUID)
-RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER AS $$
+RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
   v_state game_states;
-  v_room rooms;
-  v_player INT;
-  v_scores INT[];
-  v_locked INT[];
-  v_new_q UUID;
 BEGIN
   SELECT * INTO v_state FROM game_states WHERE room_id = p_room_id FOR UPDATE;
 
-  -- Guard: Only act if active countdown has strictly expired
-  IF v_state.phase <> 'buzzer_active' OR v_state.buzz_expires_at > clock_timestamp() THEN
-    RETURN jsonb_build_object('transitioned', false, 'reason', 'NOT_EXPIRED_OR_WRONG_PHASE');
+  -- 250ms tolerance cushion prevents premature client clock rejections
+  IF v_state.phase <> 'player_answering' 
+     OR (v_state.buzz_expires_at - INTERVAL '250 milliseconds') > clock_timestamp() THEN
+    RETURN jsonb_build_object('transitioned', false, 'reason', 'NOT_EXPIRED');
   END IF;
 
-  SELECT * INTO v_room FROM rooms WHERE id = p_room_id FOR UPDATE;
-  v_player := v_state.active_player_index;
-  v_scores := v_room.player_scores;
+  -- Transition to judge_evaluating without docking points automatically
+  UPDATE game_states SET
+    phase = 'judge_evaluating',
+    buzz_expires_at = NULL
+  WHERE room_id = p_room_id;
 
-  -- Apply -1 Penalty for Timeout
-  v_scores[v_player + 1] := v_scores[v_player + 1] - 1;
-  UPDATE rooms SET player_scores = v_scores WHERE id = p_room_id;
-
-  INSERT INTO score_log (room_id, question_id, player_index, delta, reason)
-  VALUES (p_room_id, v_state.current_question_id, v_player, -1, 'timeout');
-
-  v_locked := array_append(v_state.locked_player_indices, v_player);
-
-  IF cardinality(v_locked) >= 3 THEN
-    SELECT q.id INTO v_new_q FROM questions q
-    WHERE q.category = ANY(v_room.selected_categories)
-      AND q.id NOT IN (SELECT question_id FROM room_questions WHERE room_id = p_room_id)
-    ORDER BY random() LIMIT 1;
-
-    IF v_new_q IS NULL THEN
-      UPDATE game_states SET phase = 'game_over', active_player_index = NULL, buzz_expires_at = NULL WHERE room_id = p_room_id;
-      RETURN jsonb_build_object('transitioned', true, 'outcome', 'QUESTIONS_EXHAUSTED');
-    END IF;
-
-    INSERT INTO room_questions (room_id, question_id) VALUES (p_room_id, v_new_q);
-
-    UPDATE game_states SET
-      phase = 'question_active',
-      current_question_id = v_new_q,
-      active_player_index = NULL,
-      locked_player_indices = ARRAY[]::INT[],
-      buzz_expires_at = NULL
-    WHERE room_id = p_room_id;
-
-    RETURN jsonb_build_object('transitioned', true, 'outcome', 'NEXT_QUESTION');
-  ELSE
-    UPDATE game_states SET
-      phase = 'question_active',
-      active_player_index = NULL,
-      locked_player_indices = v_locked,
-      buzz_expires_at = NULL
-    WHERE room_id = p_room_id;
-
-    RETURN jsonb_build_object('transitioned', true, 'outcome', 'STEAL_REOPENED', 'locked', v_locked);
-  END IF;
+  RETURN jsonb_build_object('transitioned', true);
 END;
 $$;
 ```
 
-#### 4.6 Manual Score Adjustment (`adjust_score`)
+#### 4.8 Manual Score Adjustment (`adjust_score`)
 ```sql
 CREATE OR REPLACE FUNCTION adjust_score(
   p_room_id UUID, 
   p_player_index INT, 
   p_delta INT
 )
-RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER AS $$
+RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
   v_room rooms;
+  v_state game_states;
   v_scores INT[];
 BEGIN
-  SELECT * INTO v_room FROM rooms WHERE id = p_room_id FOR UPDATE;
-  v_scores := v_room.player_scores;
-  v_scores[p_player_index + 1] := v_scores[p_player_index + 1] + p_delta;
+  SELECT * INTO v_room FROM rooms WHERE id = p_room_id;
+  IF v_room.referee_uid <> auth.uid() THEN
+    RAISE EXCEPTION 'UNAUTHORIZED_REFEREE';
+  END IF;
 
-  UPDATE rooms SET player_scores = v_scores WHERE id = p_room_id;
+  IF p_player_index NOT IN (0, 1, 2) THEN
+    RETURN jsonb_build_object('success', false, 'error', 'INVALID_PLAYER_INDEX');
+  END IF;
+
+  SELECT * INTO v_state FROM game_states WHERE room_id = p_room_id FOR UPDATE;
+  v_scores := v_state.player_scores;
+  v_scores[p_player_index + 1] := v_scores[p_player_index + 1] + p_delta;
 
   INSERT INTO score_log (room_id, player_index, delta, reason)
   VALUES (p_room_id, p_player_index, p_delta, 'manual_adjust');
 
-  -- Check if adjustment triggered victory
   IF v_scores[p_player_index + 1] >= 10 THEN
-    UPDATE game_states SET phase = 'game_over', winner_player_index = p_player_index WHERE room_id = p_room_id;
+    UPDATE game_states SET
+      phase = 'game_over',
+      player_scores = v_scores,
+      winner_player_index = p_player_index,
+      active_player_index = NULL,
+      buzz_expires_at = NULL
+    WHERE room_id = p_room_id;
+  ELSE
+    UPDATE game_states SET player_scores = v_scores WHERE room_id = p_room_id;
   END IF;
 
   RETURN jsonb_build_object('success', true, 'player_scores', v_scores);
@@ -628,31 +727,39 @@ END;
 $$;
 ```
 
-#### 4.7 Question Skipping (`skip_question`)
+#### 4.9 Skip Question (`skip_question`)
 ```sql
-CREATE OR REPLACE FUNCTION skip_question(p_room_id UUID)
-RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER AS $$
+CREATE OR REPLACE FUNCTION skip_question(p_room_id UUID, p_category TEXT DEFAULT NULL)
+RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
   v_room rooms;
-  v_new_q UUID;
+  v_state game_states;
+  v_new_q questions;
+  v_winner INT;
 BEGIN
-  SELECT * INTO v_room FROM rooms WHERE id = p_room_id FOR UPDATE;
+  SELECT * INTO v_room FROM rooms WHERE id = p_room_id;
+  IF v_room.referee_uid <> auth.uid() THEN
+    RAISE EXCEPTION 'UNAUTHORIZED_REFEREE';
+  END IF;
 
-  SELECT q.id INTO v_new_q FROM questions q
-  WHERE q.category = ANY(v_room.selected_categories)
+  SELECT * INTO v_state FROM game_states WHERE room_id = p_room_id FOR UPDATE;
+
+  SELECT * INTO v_new_q FROM questions q
+  WHERE q.category = COALESCE(p_category, v_room.selected_categories[1])
     AND q.id NOT IN (SELECT question_id FROM room_questions WHERE room_id = p_room_id)
   ORDER BY random() LIMIT 1;
 
-  IF v_new_q IS NULL THEN
-    UPDATE game_states SET phase = 'game_over', active_player_index = NULL, buzz_expires_at = NULL WHERE room_id = p_room_id;
-    RETURN jsonb_build_object('success', true, 'outcome', 'QUESTIONS_EXHAUSTED');
+  IF NOT FOUND THEN
+    SELECT array_position(v_state.player_scores, max(s)) - 1 INTO v_winner FROM unnest(v_state.player_scores) s;
+    UPDATE game_states SET phase = 'game_over', winner_player_index = v_winner WHERE room_id = p_room_id;
+    RETURN jsonb_build_object('success', true, 'outcome', 'QUESTIONS_EXHAUSTED', 'winner', v_winner);
   END IF;
 
-  INSERT INTO room_questions (room_id, question_id) VALUES (p_room_id, v_new_q);
+  INSERT INTO room_questions (room_id, question_id) VALUES (p_room_id, v_new_q.id);
 
   UPDATE game_states SET
-    phase = 'question_active',
-    current_question_id = v_new_q,
+    phase = 'question_revealed',
+    current_question_id = v_new_q.id,
     active_player_index = NULL,
     locked_player_indices = ARRAY[]::INT[],
     buzz_expires_at = NULL
@@ -663,143 +770,79 @@ END;
 $$;
 ```
 
-### 5. Client Architecture & Implementation Subsystems
+#### 4.10 Server Time Probe (`get_server_time`)
+```sql
+CREATE OR REPLACE FUNCTION get_server_time()
+RETURNS TIMESTAMPTZ LANGUAGE sql STABLE AS $$
+  SELECT clock_timestamp();
+$$;
+```
+
+--------------------------------------------------------------------------------
+
+### 5. Client Subsystems & Architectural Patterns
 
 #### 5.1 Touch Arbitration Engine (Players Console)
-*   **Hardware Interface**: Utilizes Flutter's raw `Listener(onPointerDown: ...)` with `HitTestBehavior.opaque` across three expanded flex columns.
-*   **Local UI Lockout**: On `PointerDownEvent`, the local `ValueNotifier<int?> localActivePlayer` is set synchronously in the UI frame before entering the asynchronous event loop. Any touch on remaining columns while `localActivePlayer.value != null` is discarded at 0ms latency.
-*   **Tactile Confirmation**: `HapticFeedback.heavyImpact()` and a local audio asset `buzz.mp3` fire instantly in the pointer callback.
-*   **RPC Dispatch**: The asynchronous call `supabase.rpc('buzz', ...)` is fired in the background. If the server rejects the buzz (e.g. wrong phase), `localActivePlayer.value` resets.
+*   **Hardware Interface**: Raw `Listener(onPointerDown: ...)` with `HitTestBehavior.opaque` across three expanded flex columns, separated by 12dp neutral dead-zone gutters.
+*   **Synchronous UI Lockout**: On `PointerDownEvent`, the widget validates that `columnIndex` is NOT present in `lockedPlayerIndices`. Only then does it set `localActivePlayer.value = columnIndex` synchronously in the UI frame (< 16ms). Any touch on remaining columns while `localActivePlayer.value != null` is discarded before entering the asynchronous event loop.
+*   **Two-Tier Feedback**:
+    *   *Tier 1 (Synchronous, 0ms)*: Local subtle tactile tick (`HapticFeedback.selectionClick()`) and touch ripple.
+    *   *Tier 2 (Authoritative, ~50–100ms)*: Full buzzer horn (`buzz.mp3`), heavy vibration, and active column pulse animation fire upon receiving server confirmation or `player_answering` broadcast.
+*   **Reset Hook**: `localActivePlayer.value` is reset to `null` whenever `phase` transitions to `question_revealed`, `buzzer_active`, or whenever `active_player_index == null`.
 
-#### 5.2 Clock-Offset Correction & Timer Synchronization
-*   On room join/reconnect, the client records the delta between device UTC time and the Supabase HTTP response `Date` header:
-    $$\Delta_{\text{clock}} = T_{\text{server}} - T_{\text{local}}$$
-*   The reactive countdown provider derives remaining time as:
-    $$t_{\text{remaining}} = \max\left(0, \left(T_{\text{buzz\_expires\_at}} + \Delta_{\text{clock}}\right) - T_{\text{local}}\right)$$
-*   This ensures budget Android devices with skewed local clocks display exact millisecond-accurate countdowns matching server thresholds.
+#### 5.2 Server Probe Clock Synchronization
+*   On room pairing or reconnection, the client probes `get_server_time()` and computes:
+    $$\Delta_{\text{clock}} = T_{\text{server}} + \frac{RTT}{2} - T_{\text{local}}$$
+*   The countdown provider calculates remaining time as:
+    $$t_{\text{remaining}} = \max\left(0, T_{\text{buzz\_expires\_at}} - \left(T_{\text{local}} + \Delta_{\text{clock}}\right)\right)$$
+*   Combined with the server's 250ms expiration cushion, this prevents premature turn expiration rejections.
 
-#### 5.3 Silent Reconnection & Zombie State Sweeping
-*   **Lifecycle Listener**: Client monitors `AppLifecycleState.resumed`.
-*   **Reconnection Overlay**: On resume, an immediate high-priority modal overlay ("Reconnecting...") blocks touches.
-*   **State Refetch & Zombie Check**: The client issues a REST fetch for `game_states`. If `phase == 'buzzer_active'` and `buzz_expires_at <= clock_timestamp()`, the client immediately fires `expire_turn()`.
-*   **Overlay Tear-Down**: Once fresh state is applied to Riverpod, the overlay dissolves with a 150ms fade.
-
-#### 5.4 Audio Stream & Asset Pre-Caching Pipeline
-*   **Player Package**: Implemented via `just_audio` using `AudioPlayer`.
-*   **Pre-Caching Hook**: When `game_states.phase` transitions to `question_active` with `question_type == 'audio'`, the Referee client immediately executes `await player.setUrl(audioUrl); await player.load();` while the card is rendering.
-*   **Playback Trigger**: Playback begins instantaneously when the Referee taps the Play button, eliminating streaming latency during gameplay.
-
-### 6. Row-Level Security (RLS) & Authorization
-
-*   **Anonymous Auth**: Every client signs in anonymously via `supabase.auth.signInAnonymously()`, acquiring an individual `auth.uid()`.
-*   **Table Access Policies**:
-    *   `rooms`: Read permitted if `auth.uid() IN (referee_uid, console_uid)`. Insert allowed for new rooms. Direct client updates disabled; all updates restricted to RPC functions.
-    *   `game_states`: Publicly selectable by room members; updates restricted to `SECURITY DEFINER` RPCs.
-    *   `questions`: Selectable by `auth.uid() = referee_uid`. Only public question metadata (excluding `reference_answer` and `judge_notes`) accessible to Console device through a Postgres View (`v_console_questions`).
-    *   `score_log`: Selectable by room members for summary generation.
-
-### 7. Storage Bucket Topology
-
-```
-supabase/storage/
-  └── questions/               (Bucket: public read)
-        ├── images/
-        │     └── {question_uuid}.jpg   (Optimized JPEG, <= 300 KB, <= 1080px)
-        └── audio/
-              └── {question_uuid}.mp3   (CBR MP3, <= 10s duration)
-```
-Write permissions to the `questions` storage bucket are locked to the Supabase Service Role Key for administrative bulk uploads.
-
+#### 5.3 Audio Streaming & Automatic Ducking
+*   **Package**: `just_audio` using `AudioPlayer`.
+*   **Pre-Caching**: In `question_revealed`, if `question_type == 'audio'`, the Referee client loads the audio stream while the card renders.
+*   **Automatic Ducking**: In `QuestionDisplayCard`, a listener monitors `gameStateProvider`. The moment `phase` transitions to `player_answering`, `player.pause()` is invoked immediately, ensuring the player's spoken answer is clearly audible.
 
 --------------------------------------------------------------------------------
 
 ## Alternatives Considered
 
-### Alternative 1: One Phone Per Player (BYOD Model)
+### Alternative 1: Bring-Your-Own-Device (One Phone Per Player)
+*   **Pros**: Familiar party game format; players hold their own phones.
+*   **Cons**: 50–200ms network round-trip discrepancies distort physical buzzer fairness; setup friction quadruples.
+*   **Rejection Rationale**: Consolidating players onto a single shared landscape console eliminates network latency variance through hardware pointer arbitration.
 
-*   **Pros**:
-    *   Players hold their own devices naturally without physical crowding.
-    *   Familiar pattern matching mass-market party games (e.g., Kahoot, Jackbox).
-*   **Cons**:
-    *   **Network Latency Skew**: Inevitable 50–200ms round-trip latency discrepancies between cellular carriers and Wi-Fi networks distort buzzer race fairness.
-    *   **Setup Friction**: Requires every participant at a gathering to download, install, and configure the application.
-    *   **Resource Consumption**: Quadruples Supabase Realtime concurrent connection count per room.
-*   **Reason for Rejection**: Rejected by author: Physical setup simplicity and total elimination of network latency races through local hardware touch arbitration outweigh individual device convenience.
+### Alternative 2: Local Wi-Fi Hotspot Mesh (v1.0 Architecture)
+*   **Pros**: Operates without internet access; zero cloud costs.
+*   **Cons**: Modern Android (API 29+) and iOS permission restrictions penalize local hotspot creation; high failure rate.
+*   **Rejection Rationale**: Unstable local Wi-Fi hotspots cause frequent pairing failures. Supabase serverless infrastructure provides reliable persistence and zero network setup.
 
-### Alternative 2: Local Hotspot & Wi-Fi Direct Mesh (v1.0 Architecture)
+### Alternative 3: Server-Side Active Cron / Scheduled Background Workers
+*   **Pros**: Guarantees background turn expiration when all clients drop.
+*   **Cons**: Adds operational complexity and polling load for casual, low-frequency sessions.
+*   **Rejection Rationale**: In a living-room session, client-driven RPCs with server timestamp guards (`FOR UPDATE`) completely resolve turn deadlines without background daemon infrastructure.
 
-*   **Pros**:
-    *   Zero cloud infrastructure costs.
-    *   Operational in venues without internet connectivity.
-*   **Cons**:
-    *   Modern Android (API 29+) and iOS sandbox restrictions heavily penalize programmatic local Wi-Fi hotspot management.
-    *   High connection friction requiring manual SSID switching and IP configuration.
-    *   If the host phone receives a phone call or enters background, the local server process terminates abruptly.
-*   **Reason for Rejection**: Rejected by author: High pairing friction and mobile OS permission boundaries make local mesh fragile. Supabase cloud backend provides reliable state persistence and zero local configuration.
-
-### Alternative 3: Server-Side Active Timer Daemon (`pg_cron` / Edge Function Webhooks)
-
-*   **Pros**:
-    *   Guarantees turn expiration even if both devices completely lose power or disconnect simultaneously.
-    *   Zero reliance on client pump calls.
-*   **Cons**:
-    *   Requires configuring, funding, and monitoring external scheduled worker daemons or Postgres extensions (`pg_cron`) for casual, low-frequency sessions.
-    *   Increases database write overhead with frequent polling jobs.
-*   **Reason for Rejection**: Rejected by author: In a 2-device local gathering, both devices disconnecting simultaneously during a 10-second countdown is an extreme edge case. The client-driven `expire_turn` RPC guarded by `FOR UPDATE` and clock-validated reconnect sweep completely solves the problem with zero added infrastructure.
-
-### Alternative 4: Client-Reported Hardware Timestamps
-
-*   **Pros**:
-    *   Clients report local touch timestamps directly to server for chronological sorting.
-*   **Cons**:
-    *   Trivially exploited by altering system clock settings.
-    *   Clock drift on budget mobile hardware makes millisecond ordering across devices unreliable.
-*   **Reason for Rejection**: Rejected by author: Server `clock_timestamp()` must remain the sole authoritative arbiter of game deadlines.
-
-### Alternative 5: Flutter `GestureDetector` for Buzzer Columns
-
-*   **Pros**:
-    *   High-level abstraction with built-in tap cancellation and semantic recognition.
-*   **Cons**:
-    *   Flutter's Gesture Arena introduces frame-level resolution delays to disambiguate taps from drags or multi-touch gestures.
-    *   Can drop or delay near-simultaneous multi-finger touches across column boundaries.
-*   **Reason for Rejection**: Rejected by author: Raw `Listener` with `onPointerDown` and `HitTestBehavior.opaque` captures immediate hardware touch events at the lowest layer of the Flutter engine, executing local lockouts at 0ms latency.
-
-### Alternative 6: Portrait Orientation for Players Console
-
-*   **Pros**:
-    *   Standard vertical device holding posture.
-*   **Cons**:
-    *   Dividing a standard portrait screen into 3 horizontal bands creates narrow vertical hit targets where player palms collide.
-    *   Dividing vertically in portrait results in extremely thin vertical slivers (e.g., ~22mm wide).
-*   **Reason for Rejection**: Rejected by author: Landscape orientation provides three wide vertical columns across the full screen height, offering ergonomic separation for three adult hands.
+### Alternative 4: Full-Screen Hardware Touch with `GestureDetector`
+*   **Pros**: Higher-level gesture recognition.
+*   **Cons**: Flutter Gesture Arena introduces frame-level resolution delays to disambiguate taps from drags.
+*   **Rejection Rationale**: Raw `Listener(onPointerDown: ...)` captures hardware contact immediately at the lowest engine layer, enabling synchronous lockouts.
 
 --------------------------------------------------------------------------------
 
 ## Non-Functional Requirements
 
 ### Security & Privacy
-*   **Anonymous Operation**: Zero Personally Identifiable Information (PII) is stored. Authentication uses anonymous tokens.
-*   **Token Protection**: Role tokens (`referee_token`, `console_token`) are 256-bit cryptographically random strings hashed via SHA-256 in Postgres. Raw tokens are stored exclusively in platform-native secure storage (`EncryptedSharedPreferences` on Android, Keychain with `synchronizable: false` on iOS).
-*   **Row-Level Security (RLS)**: Enforces table isolation so only paired device UIDs can query room state. Reference answers are inaccessible to the console device.
+*   **Anonymous Operation**: Zero PII is stored. Devices authenticate anonymously via Supabase Auth (`auth.uid()`).
+*   **Row-Level Security (RLS)**: Enforces table isolation. Direct table mutations are disabled; all mutations flow through `SECURITY DEFINER` RPCs with `search_path = public, pg_temp` and caller identity validation.
+*   **Question Isolation**: Clues and reference answers are accessible strictly to the Referee. The Players Console queries only `game_states`.
 
 ### Performance & Latency
-*   **Local Touch Response**: Pointer down to visual color change and haptic trigger must complete within a single UI frame (< 16ms).
-*   **RPC Execution**: Server RPCs (`buzz`, `judge_mark`, `expire_turn`) must complete execution within < 100ms under standard network conditions.
-*   **Asset Footprint**: Images compressed to <= 300 KB; audio clips compressed to <= 10s MP3 (< 160 KB) to ensure rapid loading on cellular connections.
+*   **Local Touch Response**: Pointer contact to visual feedback must complete within a single UI frame (< 16ms).
+*   **RPC Execution**: Stored procedures must execute in < 80ms on PostgreSQL.
+*   **Media Footprint**: Images compressed to <= 300 KB; audio clips compressed to <= 10s CBR MP3 (<= 160 KB).
 
 ### Operational Resilience
-*   **Automatic Room Expiration**: Unused or abandoned rooms expire automatically after 4 hours (`room_expires_at`).
-*   **Idempotent State Mutations**: All RPCs tolerate duplicate delivery from flaky connections without corrupting scores or state versions.
-
---------------------------------------------------------------------------------
-
-## Future Improvements
-
-*   **Tournament & League Mode**: Multi-round tournaments with bracket tracking and cumulative scoring across multiple games.
-*   **Host-Driven Custom Questions**: Local question creator allowing hosts to input custom trivia packs for corporate or family events.
-*   **Web Console for Players**: Flutter Web deployment allowing players to use a laptop or smart TV as the shared buzzer console.
-
+*   **Screen Wake Lock**: `wakelock_plus` prevents OS screen dimming and sleeping during active matches.
+*   **Automatic Room Expiration**: Unused rooms expire after 4 hours (`room_expires_at`).
 
 --------------------------------------------------------------------------------
 
@@ -810,196 +853,216 @@ Write permissions to the `questions` storage bucket are locked to the Supabase S
 #### 1. Configuration & Project Initialization
 
 *   **`pubspec.yaml`** (`Modify`):
-    *   **Type / Scope**: Flutter Project Dependency Manifest.
-    *   **Proposed Changes**: Add dependencies: `flutter_riverpod`, `supabase_flutter`, `go_router`, `flutter_secure_storage`, `just_audio`, `cached_network_image`, `share_plus`, `flutter_animate`, `google_fonts`. Configure asset folders for local audio (`assets/audio/buzz.mp3`).
-    *   **Rationale**: Establishes all required third-party libraries for state management, networking, secure storage, and media handling.
+    *   **Scope**: Project Dependency Manifest.
+    *   **Proposed Changes**: Add production dependencies: `flutter_riverpod: ^2.5.1`, `supabase_flutter: ^2.5.6`, `go_router: ^14.1.4`, `just_audio: ^0.9.38`, `cached_network_image: ^3.3.1`, `share_plus: ^9.0.0`, `flutter_animate: ^4.5.0`, `google_fonts: ^6.2.1`, `wakelock_plus: ^1.2.5`, `shared_preferences: ^2.2.3`. Add dev dependencies: `mocktail: ^1.0.4`, `flutter_lints: ^4.0.0`. Configure asset paths for `assets/audio/buzz.mp3`.
+    *   **Rationale**: Configures required libraries for state management, networking, audio streaming, screen sleep prevention, and test mocking.
 
 *   **`analysis_options.yaml`** (`Modify`):
-    *   **Type / Scope**: Static Analysis Configuration.
-    *   **Proposed Changes**: Enable strict mode (`strict-casts`, `strict-inference`, `strict-raw-types`) and Flutter lints.
-    *   **Rationale**: Prevents runtime type bugs in polymorphic RPC response decoding and state models.
+    *   **Scope**: Static Analysis Configuration.
+    *   **Proposed Changes**: Enable strict inference, strict casts, and standard Flutter linter rules.
+    *   **Rationale**: Prevents runtime type bugs in RPC response decoding.
+
+*   **`android/app/src/main/AndroidManifest.xml`** (`Modify`):
+    *   **Scope**: Android Platform Permissions.
+    *   **Proposed Changes**: Add `android.permission.INTERNET`, `android.permission.VIBRATE`, and set `android:usesCleartextTraffic="true"` for local Supabase emulator testing.
+    *   **Rationale**: Enables network access, haptics, and local network debugging.
+
+*   **`ios/Runner/Info.plist`** (`Modify`):
+    *   **Scope**: iOS Platform Configuration.
+    *   **Proposed Changes**: Add `UIBackgroundModes` audio declaration if needed, and allow local networking clearances for testing.
+    *   **Rationale**: Enables network connectivity and audio playback on iOS devices.
 
 *   **`README.md`** (`Modify`):
-    *   **Type / Scope**: Developer Documentation.
-    *   **Proposed Changes**: Document architecture, 2-device topology, Supabase setup steps, and local testing instructions.
-    *   **Rationale**: Provides onboarding instructions and architectural context for contributors.
+    *   **Scope**: Project Documentation.
+    *   **Proposed Changes**: Document 2-device topology, Supabase migration commands, and setup instructions.
+    *   **Rationale**: Provides developer onboarding instructions.
 
 #### 2. Backend Migrations & Database Scripts
 
 *   **`supabase/migrations/20261115000000_create_quiz_buzzer_schema.sql`** (`Create`):
-    *   **Type / Scope**: PostgreSQL DDL Migration.
-    *   **Proposed Changes**: Creates tables: `rooms`, `game_states`, `questions`, `room_questions`, `score_log`. Configures foreign keys, cascades, indexes, and the auto-incrementing `trg_state_version` trigger.
-    *   **Rationale**: Establishes the core relational schema supporting atomic transitions and room lifecycle.
+    *   **Scope**: PostgreSQL DDL Migration.
+    *   **Proposed Changes**: Creates tables `rooms`, `game_states`, `questions`, `room_questions`, `score_log`. Configures `idx_rooms_active_pin` partial unique index, `trg_state_version` trigger, `REPLICA IDENTITY FULL`, and adds `game_states` to `supabase_realtime` publication.
+    *   **Rationale**: Establishes the consolidated relational schema supporting atomic transitions and real-time broadcasts.
 
 *   **`supabase/migrations/20261115000001_create_quiz_buzzer_rpcs.sql`** (`Create`):
-    *   **Type / Scope**: PL/pgSQL Stored Procedures.
-    *   **Proposed Changes**: Implements `create_room`, `join_room`, `buzz`, `judge_mark`, `expire_turn`, `adjust_score`, and `skip_question` with `SECURITY DEFINER` and `FOR UPDATE` concurrency locks.
-    *   **Rationale**: Encapsulates all transactional game logic on the server to prevent client-side race conditions.
+    *   **Scope**: PL/pgSQL Stored Procedures.
+    *   **Proposed Changes**: Implements `create_room`, `join_room`, `start_game`, `arm_buzzer`, `buzz`, `judge_mark`, `expire_turn`, `adjust_score`, `skip_question`, and `get_server_time` with `SECURITY DEFINER`, search path hardening, caller identity validation, and `FOR UPDATE` locks on `game_states`.
+    *   **Rationale**: Implements all transactional game logic securely on the server.
 
 *   **`supabase/migrations/20261115000002_create_quiz_buzzer_rls.sql`** (`Create`):
-    *   **Type / Scope**: Row-Level Security Policies.
-    *   **Proposed Changes**: Enables RLS on all tables. Configures anonymous auth UID binding and creates the sanitized view `v_console_questions` to prevent console devices from reading reference answers.
-    *   **Rationale**: Secures questions, answers, and room mutations against unauthorized tampering.
+    *   **Scope**: Row-Level Security Policies.
+    *   **Proposed Changes**: Enables RLS across all tables. Restricts direct table mutations; permits read access on `rooms` and `game_states` to paired anonymous UIDs. Restricts `questions` SELECT strictly to `referee_uid`.
+    *   **Rationale**: Secures data while strictly maintaining Content Isolation for the console device.
 
 *   **`supabase/seed.sql`** (`Create`):
-    *   **Type / Scope**: Seed Data.
-    *   **Proposed Changes**: Populates initial trivia questions across 10 categories (text, royalty-free sample image URLs, royalty-free sample audio URLs).
-    *   **Rationale**: Enables immediate local and staging testing without manual question entry.
+    *   **Scope**: Seed Trivia Content.
+    *   **Proposed Changes**: Inserts sample questions across 10 categories (text, royalty-free sample images, royalty-free audio clips).
+    *   **Rationale**: Enables immediate local testing without manual database entry.
 
 #### 3. Core Utilities & Infrastructure
 
 *   **`lib/core/constants/app_colors.dart`** (`Create`):
-    *   **Type / Scope**: Design System Foundation.
-    *   **Proposed Changes**: Defines color palette, including dedicated vibrant tones for Player 0 (Electric Blue `#2979FF`), Player 1 (Coral Red `#FF5252`), and Player 2 (Lime Green `#00E676`).
-    *   **Rationale**: Provides consistent visual identities for the three players across both devices.
+    *   **Scope**: Visual Palette Definition.
+    *   **Proposed Changes**: Defines player column colors: Player 1 / Index 0 (Electric Blue `#2979FF`), Player 2 / Index 1 (Coral Red `#FF5252`), Player 3 / Index 2 (Lime Green `#00E676`), and background neutrals.
+    *   **Rationale**: Enforces distinct visual identities across both devices.
 
 *   **`lib/core/constants/app_constants.dart`** (`Create`):
-    *   **Type / Scope**: Global Configuration Constants.
-    *   **Proposed Changes**: Defines turn duration (`10 seconds`), room TTL (`4 hours`), local asset paths, and storage bucket names.
-    *   **Rationale**: Eliminates magic numbers and centralized parameter management.
+    *   **Scope**: Global Configuration Constants.
+    *   **Proposed Changes**: Defines turn duration (`10s`), room TTL (`4h`), asset paths, and storage bucket names.
+    *   **Rationale**: Eliminates magic numbers and centralizes parameter management.
 
 *   **`lib/core/network/supabase_client.dart`** (`Create`):
-    *   **Type / Scope**: Network Layer Provider.
-    *   **Proposed Changes**: Exposes configured Supabase client instance and initializes anonymous session authentication.
-    *   **Rationale**: Centralizes database and realtime connectivity.
-
-*   **`lib/core/storage/secure_storage_service.dart`** (`Create`):
-    *   **Type / Scope**: Secure Credential Store.
-    *   **Proposed Changes**: Implements token persistence using `FlutterSecureStorage` with `synchronizable: false` on iOS and encrypted preferences on Android.
-    *   **Rationale**: Safely stores `referee_token` and `console_token` across app restarts while preventing cross-device iCloud Keychain leaks.
-
-*   **`lib/core/utils/clock_offset_service.dart`** (`Create`):
-    *   **Type / Scope**: Synchronization Utility.
-    *   **Proposed Changes**: Calculates and stores `clockOffset` by parsing HTTP response headers from Supabase REST endpoints.
-    *   **Rationale**: Compensates for system clock drift on budget mobile hardware to ensure timer accuracy.
+    *   **Scope**: Network Client Provider.
+    *   **Proposed Changes**: Exposes configured Supabase client and provides an anonymous sign-in helper that only executes if `supabase.auth.currentUser == null`.
+    *   **Rationale**: Manages Supabase connectivity while preserving existing session UIDs across app restarts.
 
 *   **`lib/core/audio/sound_service.dart`** (`Create`):
-    *   **Type / Scope**: Audio Management Engine.
-    *   **Proposed Changes**: Pre-loads local buzzer audio asset `assets/audio/buzz.mp3` for instant SFX playback and manages streaming `just_audio` instances for audio trivia questions.
-    *   **Rationale**: Decouples audio playback from UI widgets and provides seamless pre-caching.
+    *   **Scope**: Audio & SFX Controller.
+    *   **Proposed Changes**: Manages audio playback: plays local asset buzzer sound (`buzz.mp3`), manages streaming `AudioPlayer` instance for trivia audio clips, and provides an immediate `pause()` hook for audio ducking on buzzes.
+    *   **Rationale**: Decouples audio playback from UI widgets and eliminates audio overlap during answers.
 
-#### 4. Navigation & App Scaffold
+*   **`lib/core/utils/clock_sync_service.dart`** (`Create`):
+    *   **Scope**: Server Time Synchronization.
+    *   **Proposed Changes**: Calls `get_server_time` RPC and calculates $\Delta_{\text{clock}} = T_{\text{server}} + \frac{RTT}{2} - T_{\text{local}}$.
+    *   **Rationale**: Provides millisecond-level clock calibration for accurate countdown rendering.
+
+#### 4. Routing & Application Scaffold
 
 *   **`lib/main.dart`** (`Modify`):
-    *   **Type / Scope**: Application Entrypoint.
-    *   **Proposed Changes**: Initializes Flutter binding, initializes Supabase SDK, enforces landscape orientation locks conditionally for the Players Console, and mounts `ProviderScope`.
-    *   **Rationale**: Configures platform services and bootstrap lifecycle.
+    *   **Scope**: Application Bootstrap.
+    *   **Proposed Changes**: Initializes Flutter widgets binding, Supabase client SDK, mounts `ProviderScope`, and runs `QuizBuzzerApp`.
+    *   **Rationale**: Bootstrap entry point.
 
 *   **`lib/app.dart`** (`Create`):
-    *   **Type / Scope**: Root Application Widget.
-    *   **Proposed Changes**: Configures `MaterialApp.router` with theme tokens, dark mode palette, and GoRouter integration.
-    *   **Rationale**: Houses application-wide presentation styling and routing delegates.
+    *   **Scope**: Root Application Widget.
+    *   **Proposed Changes**: Configures `MaterialApp.router` with dark theme styling and GoRouter configuration.
+    *   **Rationale**: Houses application-wide presentation styling.
 
 *   **`lib/routes/app_router.dart`** (`Create`):
-    *   **Type / Scope**: Declarative Route Definition.
-    *   **Proposed Changes**: Defines paths: `/` (Landing), `/host` (Room Setup), `/join` (PIN Entry), `/referee/:roomId` (Referee Cockpit), and `/console/:roomId` (Players Console). Implements redirect guards verifying token existence.
-    *   **Rationale**: Prevents unauthorized route navigation and manages deep links.
+    *   **Scope**: Declarative Route Table.
+    *   **Proposed Changes**: Defines routes: `/` (LandingScreen), `/host` (RoomSetupScreen), `/join` (PinEntryScreen), `/referee/:roomId` (RefereeCockpitScreen), and `/console/:roomId` (PlayersConsoleScreen).
+    *   **Rationale**: Manages navigation and parameter passing.
 
-#### 5. Domain Models & Repositories
+#### 5. Domain Entities & Data Repositories
 
 *   **`lib/features/game/domain/room.dart`** (`Create`):
-    *   **Type / Scope**: Domain Entity.
-    *   **Proposed Changes**: Immutable model for room properties: `id`, `roomPin`, `playerNames`, `playerScores`, and `selectedCategories`. Includes JSON serialization.
-    *   **Rationale**: Represents room metadata on client devices.
+    *   **Scope**: Domain Entity.
+    *   **Proposed Changes**: Model for room metadata: `id`, `roomPin`, `refereeUid`, `consoleUid`, and `selectedCategories`.
+    *   **Rationale**: Represents room properties.
 
 *   **`lib/features/game/domain/game_state.dart`** (`Create`):
-    *   **Type / Scope**: Domain Entity.
-    *   **Proposed Changes**: Immutable model for `game_states`: `phase`, `stateVersion`, `currentQuestionId`, `activePlayerIndex`, `lockedPlayerIndices`, `buzzExpiresAt`, and `winnerPlayerIndex`.
-    *   **Rationale**: Houses reactive state consumed by UI rendering engines.
+    *   **Scope**: Domain Entity.
+    *   **Proposed Changes**: Model for `game_states`: `roomId`, `phase`, `stateVersion`, `playerNames`, `playerScores`, `currentQuestionId`, `activePlayerIndex`, `lockedPlayerIndices`, `buzzExpiresAt`, and `winnerPlayerIndex`.
+    *   **Rationale**: Core immutable state representation.
 
 *   **`lib/features/game/domain/question.dart`** (`Create`):
-    *   **Type / Scope**: Domain Entity.
-    *   **Proposed Changes**: Immutable model for questions: `id`, `category`, `questionType`, `questionText`, `imageUrl`, `audioUrl`, `referenceAnswer`, and `judgeNotes`.
-    *   **Rationale**: Holds trivia question content and reference answers.
+    *   **Scope**: Domain Entity.
+    *   **Proposed Changes**: Model for questions: `id`, `category`, `questionType`, `questionText`, `imageUrl`, `audioUrl`, `referenceAnswer`, and `judgeNotes`.
+    *   **Rationale**: Encapsulates trivia questions.
 
 *   **`lib/features/game/data/game_repository.dart`** (`Create`):
-    *   **Type / Scope**: Data Access Layer.
-    *   **Proposed Changes**: Wraps Supabase RPC calls (`create_room`, `join_room`, `buzz`, `judge_mark`, `expire_turn`, `skip_question`, `adjust_score`) and queries.
-    *   **Rationale**: Isolates RPC network communication from UI presentation logic.
+    *   **Scope**: Data Access Repository.
+    *   **Proposed Changes**: Implements all client RPC invocations: `createRoom`, `joinRoom`, `startGame`, `armBuzzer`, `buzz`, `judgeMark`, `expireTurn`, `adjustScore`, `skipQuestion`, and `getServerTime`.
+    *   **Rationale**: Isolates RPC network communications from presentation controllers.
 
 *   **`lib/features/game/data/realtime_service.dart`** (`Create`):
-    *   **Type / Scope**: WebSocket Synchronization Client.
-    *   **Proposed Changes**: Subscribes to Postgres Changes on `game_states`. Checks `state_version` gaps; triggers fallback REST refetches upon connection interruption.
-    *   **Rationale**: Manages real-time data streaming and ensures message loss recovery.
+    *   **Scope**: Realtime WebSocket Client.
+    *   **Proposed Changes**: Subscribes to Postgres Changes on `game_states` for the active `roomId`. Applies incoming state snapshots monotonically when `state_version > local_version`.
+    *   **Rationale**: Drives real-time UI synchronization without redundant HTTP polling.
 
-#### 6. Presentation Layer & State Notifiers
+#### 6. Presentation Layer & State Controllers
 
 *   **`lib/features/game/presentation/providers/game_state_provider.dart`** (`Create`):
-    *   **Type / Scope**: Riverpod State Notifier.
-    *   **Proposed Changes**: Manages active `GameState` and `Room` instances, subscribing to `RealtimeService` and binding lifecycle updates.
-    *   **Rationale**: Drives UI re-renders in response to authoritative server state transitions.
+    *   **Scope**: Riverpod State Controller (`AsyncNotifier`).
+    *   **Proposed Changes**: Manages active `GameState`, subscribes to `RealtimeService`, resets `localActivePlayer.value = null` on phase transitions, and exposes game action methods.
+    *   **Rationale**: Primary reactive controller driving the application UI.
+
+*   **`lib/features/game/presentation/providers/question_provider.dart`** (`Create`):
+    *   **Scope**: Question Data Provider.
+    *   **Proposed Changes**: Fetches and caches the full `Question` row for the Referee Cockpit whenever `currentQuestionId` updates.
+    *   **Rationale**: Delivers clue text, media URLs, and reference answers to the Referee.
 
 *   **`lib/features/game/presentation/providers/countdown_provider.dart`** (`Create`):
-    *   **Type / Scope**: Riverpod Stream Provider.
-    *   **Proposed Changes**: Emits remaining countdown duration at 100ms intervals derived from `buzz_expires_at` adjusted by `clockOffset`.
-    *   **Rationale**: Powers visual progress indicators without triggering expensive full-screen rebuilds.
+    *   **Scope**: Reactive Timer Stream.
+    *   **Proposed Changes**: Emits remaining countdown duration at 100ms intervals using the calibrated formula $t = \max(0, T_{\text{expires}} - (T_{\text{local}} + \Delta_{\text{clock}}))$.
+    *   **Rationale**: Drives smooth countdown animations on both devices.
 
 *   **`lib/features/home/presentation/landing_screen.dart`** (`Create`):
-    *   **Type / Scope**: Presentation Screen.
-    *   **Proposed Changes**: Displays role selection cards: "Host as Referee" and "Join as Players Console".
-    *   **Rationale**: Serves as initial app entrypoint for device role assignment.
+    *   **Scope**: Home Screen.
+    *   **Proposed Changes**: Displays "Host as Referee" and "Join as Players Console" cards.
+    *   **Rationale**: Entrypoint for device role selection.
 
 *   **`lib/features/referee/presentation/room_setup_screen.dart`** (`Create`):
-    *   **Type / Scope**: Presentation Screen.
-    *   **Proposed Changes**: Category selection chips, text fields for the three player names, and prominent 6-digit PIN display waiting for the console to connect.
+    *   **Scope**: Referee Setup Screen.
+    *   **Proposed Changes**: Trivia category selection chips, text fields for player names, prominent 6-digit PIN display, and "Start Match" button enabled when console pairs.
     *   **Rationale**: Allows the Referee to configure and launch the match.
 
 *   **`lib/features/referee/presentation/referee_cockpit_screen.dart`** (`Create`):
-    *   **Type / Scope**: Presentation Screen.
-    *   **Proposed Changes**: Displays active question card, reference answer, judge notes, countdown bar, and scoring controls.
-    *   **Rationale**: Acts as the primary control center for the Referee during active gameplay.
+    *   **Scope**: Referee Main Screen.
+    *   **Proposed Changes**: Displays active question card, reference answer, judge notes, countdown bar, and scoring action bar. Initializes `WakelockPlus.enable()`.
+    *   **Rationale**: Primary control cockpit for the Referee during active gameplay.
 
 *   **`lib/features/referee/presentation/widgets/question_display_card.dart`** (`Create`):
-    *   **Type / Scope**: UI Component.
-    *   **Proposed Changes**: Conditionally renders text prompt, cached network image via `CachedNetworkImage`, or audio playback widget with `just_audio`.
+    *   **Scope**: Clue Presentation Widget.
+    *   **Proposed Changes**: Renders question prompt, cached network images via `CachedNetworkImage`, and audio player controls. Ducks audio when `phase == 'player_answering'`.
     *   **Rationale**: Displays multi-modal question content seamlessly.
 
 *   **`lib/features/referee/presentation/widgets/scoring_action_bar.dart`** (`Create`):
-    *   **Type / Scope**: UI Component.
-    *   **Proposed Changes**: Displays "Correct (+1)" (green), "Incorrect (−1)" (red), "Skip Question" (amber), and individual ±1 manual score adjusters.
-    *   **Rationale**: Provides fast, tactile evaluation controls for the Referee.
+    *   **Scope**: Scoring Control Panel.
+    *   **Proposed Changes**: Displays "Open Buzzer" in `question_revealed`; "Correct (+1)" and "Incorrect (−1)" in `player_answering` / `judge_evaluating`; "Skip Question"; and individual ±1 manual score adjusters.
+    *   **Rationale**: Fast, tactile evaluation controls for the Referee.
+
+*   **`lib/features/console/presentation/pin_entry_screen.dart`** (`Create`):
+    *   **Scope**: Console Pairing Screen.
+    *   **Proposed Changes**: 6-digit numeric input field with automatic focus, numeric keyboard, error message banner (`ROOM_NOT_FOUND`, `ROOM_ALREADY_CLAIMED`), and "Join Room" button.
+    *   **Rationale**: Enables Device 2 to pair with an active room.
 
 *   **`lib/features/console/presentation/players_console_screen.dart`** (`Create`):
-    *   **Type / Scope**: Presentation Screen.
-    *   **Proposed Changes**: Landscape full-screen container embedding three equal-width `BuzzerColumnWidget` instances.
-    *   **Rationale**: Serves as the interactive surface for the three competing players.
+    *   **Scope**: Players Console Screen.
+    *   **Proposed Changes**: Enforces landscape orientation via `SystemChrome.setPreferredOrientations` in `initState` and restores in `dispose`. Conditionally renders `LobbyWaitingView` when `phase == 'lobby'`, and embeds three equal-width `BuzzerColumnWidget` instances separated by 12dp gutters during gameplay.
+    *   **Rationale**: Interactive surface for the three competing players.
 
 *   **`lib/features/console/presentation/widgets/buzzer_column_widget.dart`** (`Create`):
-    *   **Type / Scope**: UI Component.
-    *   **Proposed Changes**: Uses raw `Listener(onPointerDown: ...)` with `ValueNotifier` for zero-latency local lockouts. Renders player name, score badge, pulse animations, and locked-out dimming.
-    *   **Rationale**: Executes hardware touch capture and visual feedback without gesture arena delay.
+    *   **Scope**: Individual Buzzer Column.
+    *   **Proposed Changes**: Implements raw `Listener(onPointerDown: ...)`. Verifies `!lockedPlayerIndices.contains(playerIndex)` before setting `localActivePlayer.value`. Triggers immediate haptic tick and dispatches `buzz` RPC. Renders player name, score badge, pulse animations, and locked-out dimming.
+    *   **Rationale**: Synchronous sub-frame touch capture and visual feedback.
 
 *   **`lib/features/shared/widgets/reconnecting_overlay.dart`** (`Create`):
-    *   **Type / Scope**: Modal Component.
-    *   **Proposed Changes**: Full-screen modal overlay presenting a spinner and "Reconnecting..." notice, blocking input during background resume until state synchronization completes.
-    *   **Rationale**: Prevents stale user actions during network reconnection or OS process resumption.
+    *   **Scope**: Disconnection Modal.
+    *   **Proposed Changes**: Full-screen modal overlay halting user interaction while network state synchronizes.
+    *   **Rationale**: Prevents stale user actions during network reconnection.
 
 *   **`lib/features/shared/widgets/game_over_dialog.dart`** (`Create`):
-    *   **Type / Scope**: Presentation Dialog.
-    *   **Proposed Changes**: Shows winner celebration, final score breakdown, match statistics, and a "Share Results" button powered by `share_plus`.
-    *   **Rationale**: Concludes the match and provides viral sharing functionality.
+    *   **Scope**: Match Conclusion Dialog.
+    *   **Proposed Changes**: Shows winner celebration, final scores, and "Share Results" button powered by `share_plus`.
+    *   **Rationale**: Concludes the match and provides viral sharing.
 
-#### 7. Verification & Testing Suite
+#### 7. Testing Harness & Verification Suite
 
-*   **`test/unit/clock_offset_test.dart`** (`Create`):
-    *   **Type / Scope**: Unit Test.
-    *   **Proposed Changes**: Tests `ClockOffsetService` under positive, negative, and zero time skews, verifying exact countdown calculation.
-    *   **Rationale**: Ensures timer reliability against device clock discrepancies.
+*   **`test/helpers/mock_supabase.dart`** (`Create`):
+    *   **Scope**: Test Doubles & Mocks.
+    *   **Proposed Changes**: Provides mock implementations using `mocktail` for `SupabaseClient`, `PostgrestFilterBuilder`, and `RealtimeChannel`.
+    *   **Rationale**: Enables fast, reliable unit and integration testing without live network connections.
+
+*   **`test/unit/clock_sync_test.dart`** (`Create`):
+    *   **Scope**: Unit Test.
+    *   **Proposed Changes**: Tests `ClockSyncService` under positive, negative, and zero time skews, validating countdown calculation.
+    *   **Rationale**: Proves timer accuracy against clock drift.
 
 *   **`test/unit/touch_arbitration_test.dart`** (`Create`):
-    *   **Type / Scope**: Unit Test.
-    *   **Proposed Changes**: Tests synchronous `ValueNotifier` state lockouts upon simulated rapid pointer down events.
-    *   **Rationale**: Proves local touch arbitration logic locks subsequent taps at 0ms latency.
+    *   **Scope**: Unit Test.
+    *   **Proposed Changes**: Verifies synchronous `ValueNotifier` state lockouts upon simulated rapid pointer down events and proves disqualified players cannot lock out opponents.
+    *   **Rationale**: Validates sub-frame touch arbitration logic.
 
 *   **`test/widget/buzzer_column_widget_test.dart`** (`Create`):
-    *   **Type / Scope**: Widget Test.
-    *   **Proposed Changes**: Verifies visual opacity, touch rejection when column index is in `lockedPlayerIndices`, and active pulse rendering.
-    *   **Rationale**: Validates UI state rendering for the buzzer columns.
+    *   **Scope**: Widget Test.
+    *   **Proposed Changes**: Verifies column visual opacity, locked-out touch rejection, and active pulse rendering.
+    *   **Rationale**: Validates UI rendering for the buzzer columns.
 
 *   **`test/integration/game_loop_mock_test.dart`** (`Create`):
-    *   **Type / Scope**: Integration Test.
-    *   **Proposed Changes**: Simulates the full game cycle: room creation → join → buzz → wrong answer → steal reopen → correct answer → win state.
-    *   **Rationale**: Validates end-to-end state transitions across simulated network responses.
+    *   **Scope**: Integration Test.
+    *   **Proposed Changes**: Simulates the full game cycle: room creation → join → start match → arm buzzer → buzz → wrong answer → steal reopen → correct answer → win state.
+    *   **Rationale**: Validates end-to-end state transitions.
 
 --------------------------------------------------------------------------------
 
@@ -1010,33 +1073,38 @@ Write permissions to the `questions` storage bucket are locked to the Supabase S
 *   **Static Analysis & Linting**:
     *   Command: `flutter analyze`
     *   Criteria: Zero errors, zero warnings.
-*   **Unit & Widget Testing**:
-    *   Command: `flutter test`
-    *   Coverage Target: >= 80% coverage on core business logic (`lib/core/`, `lib/features/game/data/`, `lib/features/game/presentation/providers/`).
+*   **Unit & Widget Testing with Coverage**:
+    *   Command: `flutter test --coverage`
+    *   Target: >= 80% coverage on core data and presentation logic (`lib/core/`, `lib/features/game/data/`, `lib/features/game/presentation/providers/`).
 *   **Integration Simulation**:
     *   Command: `flutter test test/integration/game_loop_mock_test.dart`
-    *   Criteria: Successful traversal of all 5 Critical User Journeys.
+    *   Criteria: All 6 Critical User Journeys pass without unhandled exceptions.
 
 ### Manual Verification Matrix (Two Physical Devices)
 
 1.  **PIN Pairing & Role Lock**:
-    *   Create room on Device 1; pair Device 2 via 6-digit PIN.
-    *   Attempt to pair a third device with the same PIN; confirm rejection with `ROOM_ALREADY_CLAIMED`.
-2.  **Hardware Multi-Touch Collision**:
+    *   Create room on Device 1; pair Device 2 via 6-digit PIN on `PinEntryScreen`.
+    *   Verify Device 1 setup screen dynamically enables "Start Match".
+    *   Attempt pairing a 3rd device with the same PIN; confirm rejection with `ROOM_ALREADY_CLAIMED`.
+2.  **Two-Phase Pacing**:
+    *   Referee taps "Start Match". Verify question content appears on Device 1, while Device 2 columns show "Listening" but ignore taps.
+    *   Referee taps "Open Buzzer". Verify Device 2 columns immediately become active.
+3.  **Sub-Frame Touch Arbitration**:
     *   Place two fingers simultaneously across Column 1 and Column 2 on Device 2.
     *   Verify exactly one column registers the buzz, triggers haptic feedback, and dims remaining columns.
-3.  **Steal Cycle Validation**:
-    *   Player 1 buzzes in; Referee presses "Incorrect (−1)".
-    *   Verify Column 1 stays locked; Columns 2 and 3 reopen with a fresh 10s timer.
+4.  **Steal Cycle & Disqualified Touch Immunity**:
+    *   Player 1 buzzes in; Referee taps "Incorrect (−1)".
+    *   Verify Column 1 stays locked; Columns 2 and 3 reopen.
+    *   Have Player 1 repeatedly tap Column 1; verify Player 2 can still buzz in without hindrance.
     *   Player 2 buzzes and misses; verify only Column 3 reopens.
-    *   Player 3 misses; verify question advances automatically.
-4.  **Disconnection & Background Recovery**:
-    *   Player buzzes in. Immediately background Device 2.
-    *   Wait 15 seconds. Bring Device 2 back to foreground.
-    *   Verify "Reconnecting..." overlay appears, `expire_turn` fires, −1 penalty is applied, and the turn concludes cleanly.
-5.  **Audio Pre-Caching**:
-    *   Trigger an audio question. Verify audio begins playing instantly upon pressing Play without network buffering stutter.
-
---------------------------------------------------------------------------------
-
-*Drafted with EGM*
+    *   Player 3 misses; verify question advances to next question.
+5.  **Human Timeout Adjudication**:
+    *   Player buzzes in. Let 10 seconds elapse.
+    *   Verify chime sounds, but points are NOT deducted automatically.
+    *   Verify Referee screen displays "Timeout (-1)" or "Spoke in Time (+1)". Confirm -1; verify penalty applies.
+6.  **Audio Ducking on Buzz**:
+    *   Play an audio question. Buzz in while audio is playing.
+    *   Verify audio pauses immediately so the spoken answer is audible.
+7.  **Disconnection & Background Recovery**:
+    *   Player buzzes in. Background Device 2 for 15 seconds.
+    *   Bring Device 2 to foreground. Verify "Reconnecting..." overlay appears, state synchronizes, and overlay dismisses cleanly.
