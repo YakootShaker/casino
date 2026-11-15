@@ -1,0 +1,47 @@
+name: quiz_buzzer
+description: "A production-grade 2-device quiz buzzer application for 3 players and 1 referee."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.2.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+
+  # State Management & DI
+  flutter_riverpod: ^2.5.1
+
+  # Backend & Realtime
+  supabase_flutter: ^2.5.6
+
+  # Navigation & Routing
+  go_router: ^14.1.4
+
+  # Media & Hardware
+  just_audio: ^0.9.38
+  cached_network_image: ^3.3.1
+  wakelock_plus: ^1.2.5
+
+  # UI Enhancements & Animations
+  flutter_animate: ^4.5.0
+  google_fonts: ^6.2.1
+
+  # Storage & Native Integrations
+  shared_preferences: ^2.2.3
+  share_plus: ^9.0.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+  mocktail: ^1.0.4
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/audio/
