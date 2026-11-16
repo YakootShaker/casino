@@ -92,32 +92,69 @@ flutter analyze
 ## 📂 Project Structure
 
 ```
-lib/
-├── app.dart                                # MaterialApp.router & Dark theme setup
-├── main.dart                               # Bootstrap & Supabase initialization
-├── core/
-│   ├── audio/sound_service.dart            # SFX buzzer & trivia audio controller
-│   ├── constants/app_colors.dart           # Player colors & palette definitions
-│   ├── constants/app_constants.dart        # Game durations, TTL, and asset paths
-│   ├── network/supabase_client.dart        # Anonymous authentication helper
-│   └── utils/clock_sync_service.dart       # Sub-second RTT clock calibration
-├── features/
-│   ├── console/presentation/
-│   │   ├── pin_entry_screen.dart           # 6-digit PIN pairing screen
-│   │   ├── players_console_screen.dart     # Landscape 3-player touch console
-│   │   └── widgets/buzzer_column_widget.dart # Raw pointer down touch arbitration
-│   ├── game/
-│   │   ├── data/game_repository.dart       # Atomic RPC client repository
-│   │   ├── data/realtime_service.dart      # Realtime WebSocket stream manager
-│   │   ├── domain/game_state.dart          # Immutable state model
-│   │   ├── domain/question.dart            # Multi-modal question model
-│   │   ├── domain/room.dart                # Room metadata model
-│   │   └── presentation/providers/         # Riverpod AsyncNotifier & stream providers
-│   ├── home/presentation/landing_screen.dart # Device role selection screen
-│   ├── referee/presentation/
-│   │   ├── referee_cockpit_screen.dart     # Referee match control cockpit
-│   │   ├── room_setup_screen.dart          # Category selection & PIN display
-│   │   └── widgets/                        # Clue cards & scoring action bars
-│   └── shared/widgets/                     # Disconnect overlays & Game Over dialogs
-└── routes/app_router.dart                  # GoRouter declarative route table
+casino/                               ← project root (clean)
+├── docs/                             ← ALL documentation
+│   ├── Quiz_Buzzer_Game_Specification_AR_v2_0.docx
+│   ├── spec_extracted.txt
+│   ├── concepts_brief.md
+│   ├── design_draft.md
+│   └── reports/                      ← generated analysis reports
+│       ├── comprehension_report.md
+│       ├── consolidated_review_report.md
+│       ├── critic_report.md
+│       ├── implementation_readiness_report.md
+│       ├── intermediate_zoom_out_report.md
+│       └── zoom_out_report.md
+├── assets/
+│   └── audio/                        # buzz sound assets
+├── lib/
+│   ├── app.dart                      # MaterialApp.router & Dark theme setup
+│   ├── main.dart                     # Bootstrap & Supabase initialization
+│   ├── core/
+│   │   ├── constants/
+│   │   │   ├── app_colors.dart       # Player colors & palette definitions
+│   │   │   └── app_constants.dart    # Game durations, TTL, and asset paths
+│   │   ├── services/                 # Consolidates all services
+│   │   │   ├── supabase_client.dart  # Supabase client & anonymous auth helper
+│   │   │   ├── sound_service.dart    # SFX buzzer & trivia audio controller
+│   │   │   └── clock_sync_service.dart # Sub-second RTT clock calibration
+│   │   └── widgets/                  # Shared core widgets
+│   │       ├── game_over_dialog.dart # Match conclusion dialog & share sheet
+│   │       └── reconnecting_overlay.dart # Network resync modal overlay
+│   ├── features/
+│   │   ├── home/
+│   │   │   └── presentation/landing_screen.dart # Device role selection screen
+│   │   ├── game/
+│   │   │   ├── data/
+│   │   │   │   ├── game_repository.dart         # Atomic RPC client repository
+│   │   │   │   └── realtime_service.dart        # Realtime WebSocket stream manager
+│   │   │   ├── domain/
+│   │   │   │   ├── game_state.dart              # Immutable state model
+│   │   │   │   ├── question.dart                # Multi-modal question model
+│   │   │   │   └── room.dart                    # Room metadata model
+│   │   │   └── presentation/providers/          # Riverpod AsyncNotifier & stream providers
+│   │   │       ├── countdown_provider.dart
+│   │   │       ├── game_state_provider.dart
+│   │   │       └── question_provider.dart
+│   │   ├── console/
+│   │   │   └── presentation/
+│   │   │       ├── pin_entry_screen.dart        # 6-digit PIN pairing screen
+│   │   │       ├── players_console_screen.dart  # Landscape 3-player touch console
+│   │   │       └── widgets/buzzer_column_widget.dart # Raw pointer touch arbitration (<16ms)
+│   │   └── referee/
+│   │       └── presentation/
+│   │           ├── referee_cockpit_screen.dart  # Referee match control cockpit
+│   │           ├── room_setup_screen.dart       # Category selection & PIN display
+│   │           └── widgets/
+│   │               ├── question_display_card.dart # Clue display card & audio controller
+│   │               └── scoring_action_bar.dart  # Answer evaluation & score controls
+│   └── routes/app_router.dart        # GoRouter declarative route table
+├── test/
+│   ├── helpers/mock_supabase.dart    # Test fixtures & Mocktail doubles
+│   ├── unit/                         # Unit tests (clock sync, touch arbitration)
+│   ├── widget/                       # Widget tests (buzzer column widget)
+│   └── integration/                  # Integration tests (full game loop simulation)
+└── supabase/
+    ├── migrations/                   # PostgreSQL DDL, atomic RPCs, and RLS
+    └── seed.sql                      # Multi-modal trivia seed data
 ```

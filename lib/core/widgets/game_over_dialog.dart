@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:share_plus/share_plus.dart';
-import '../../../core/constants/app_colors.dart';
-import '../../game/domain/game_state.dart';
+import '../constants/app_colors.dart';
+import '../../features/game/domain/game_state.dart';
 
 class GameOverDialog extends StatelessWidget {
   final GameState state;

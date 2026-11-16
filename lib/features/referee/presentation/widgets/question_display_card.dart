@@ -2,7 +2,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:just_audio/just_audio.dart';
-import '../../../../core/audio/sound_service.dart';
+import '../../../../core/services/sound_service.dart';
 import '../../../../core/constants/app_colors.dart';
 import '../../../game/domain/question.dart';
 

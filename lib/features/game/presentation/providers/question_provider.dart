@@ -1,5 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../../../core/audio/sound_service.dart';
+import '../../../../core/services/sound_service.dart';
 import '../../data/game_repository.dart';
 import '../../domain/question.dart';
 

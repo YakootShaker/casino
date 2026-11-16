@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:quiz_buzzer/core/utils/clock_sync_service.dart';
+import 'package:quiz_buzzer/core/services/clock_sync_service.dart';
 
 void main() {
   group('ClockSyncService Unit Tests', () {

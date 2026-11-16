@@ -1,8 +1,8 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../../../core/audio/sound_service.dart';
-import '../../../../core/utils/clock_sync_service.dart';
+import '../../../../core/services/sound_service.dart';
+import '../../../../core/services/clock_sync_service.dart';
 import '../../data/game_repository.dart';
 import '../../data/realtime_service.dart';
 import '../../domain/game_state.dart';

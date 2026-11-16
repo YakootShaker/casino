@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../../../core/utils/clock_sync_service.dart';
+import '../../../../core/services/clock_sync_service.dart';
 
 final countdownProvider =
     StreamProvider.autoDispose.family<Duration, DateTime?>((ref, expiresAt) {

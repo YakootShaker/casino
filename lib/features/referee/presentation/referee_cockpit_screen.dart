@@ -9,8 +9,8 @@ import '../../game/domain/game_state.dart';
 import '../../game/presentation/providers/countdown_provider.dart';
 import '../../game/presentation/providers/game_state_provider.dart';
 import '../../game/presentation/providers/question_provider.dart';
-import '../../shared/widgets/game_over_dialog.dart';
-import '../../shared/widgets/reconnecting_overlay.dart';
+import '../../../core/widgets/game_over_dialog.dart';
+import '../../../core/widgets/reconnecting_overlay.dart';
 import 'widgets/question_display_card.dart';
 import 'widgets/scoring_action_bar.dart';
 

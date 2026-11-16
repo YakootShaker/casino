@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/constants/app_colors.dart';
-import '../../../core/network/supabase_client.dart';
+import '../../../core/services/supabase_client.dart';
 import '../../game/data/game_repository.dart';
 
 class PinEntryScreen extends ConsumerStatefulWidget {
