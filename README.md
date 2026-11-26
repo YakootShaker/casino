@@ -4,7 +4,7 @@
 ### *The Ultimate 2-Device Head-to-Head Trivia Arena*
 
 Transform any living room, party, or classroom into a real-time, TV-style game show.  
-**No extra dongles. No network latency lag. Just pure, sub-frame buzzer adrenaline.**
+**No extra dongles, No network latency lag. Just pure, sub-frame buzzer adrenaline.**
 
 ---
 
