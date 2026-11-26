@@ -45,7 +45,7 @@ In typical party games, everyone connects on their own phone over Wi-Fi or cellu
                   │   • Sub-frame touch arbitration (<16ms)       │
                   │   • Zero clues displayed (Anti-Peeking RLS)   │
                   └───────────────────────────────────────────────┘
-```
+```'
 
 1. **Hardware-Arbitrated Touch:** All 3 competing players share **Device 2** in landscape mode. Touches are arbitrated synchronously on the device's hardware digitizer (< 16ms) — eliminating Wi-Fi round-trip races entirely.
 2. **Zero-Peeking Content Isolation:** Row-Level Security (RLS) guarantees that questions, clues, and answers are **physically inaccessible** to the Players Console.
